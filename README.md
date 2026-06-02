@@ -4,96 +4,70 @@ A live, public view of where I'm applying and which roles I'm tracking this week
 
 ## Stack
 
-- **GitHub** — source of truth for company list, prompts, schema, workflow
+- **GitHub** — source of truth for schema, prompts, workflow, company list
 - **Supabase** — runtime data: jobs, scores, application status
 - **n8n** — daily cron that fetches jobs, scores them with Claude, upserts to Supabase
 - **Lovable** — public frontend that reads from Supabase
-- **Anthropic API** — Claude scores each posting against my profile
+- **Google Docs** — master context (resume + historical context) fetched live each run
 
 ## How it works
 
-Once a day, n8n:
-1. Reads the active company list from Supabase
-2. Hits each company's ATS API (Greenhouse, Lever, Ashby)
-3. For every new or changed posting, calls Claude to score role/level/location fit against my master context doc
-4. Upserts jobs and matches to Supabase
-5. Flips `status` to `closed` for postings that disappeared
+Once daily, n8n:
+1. Pulls the latest resume and master context from Google Docs (always fresh, no hardcoding)
+2. Reads the active company list from Supabase
+3. Hits each company's ATS API
+4. For every new posting, calls Claude to score role/level/location fit
+5. Upserts jobs and matches into Supabase
+6. Closes postings that disappeared
 
-Lovable reads from Supabase and renders three sections: companies tracked, open matches above threshold, and the application pipeline grouped by status.
+Lovable reads from Supabase and renders three sections: companies tracked, open matches, application pipeline.
 
 ## Repo layout
 
 ```
 .
 ├── README.md
-├── companies.json              # Source list; also seeded to Supabase
+├── companies.json              # source list
 ├── supabase/
-│   ├── migrations/
-│   │   ├── 001_initial_schema.sql
-│   │   └── 002_rls_policies.sql
-│   └── seed.sql                # Inserts companies.json into Supabase
+│   ├── migrations/             # schema + RLS policies
+│   └── seed.sql                # inserts companies.json
 ├── n8n/
-│   ├── workflow-greenhouse.json  # Importable workflow (Greenhouse branch only)
-│   └── WORKFLOW.md               # Full workflow spec including Lever and Ashby
+│   └── watchlist-workflow.json # importable workflow with Google Docs fetching
 ├── prompts/
-│   └── scoring-prompt.md       # Claude API prompt template
+│   └── scoring-prompt.md       # documentation of the prompt (live version is in workflow)
 └── lovable/
-    └── page-spec.md            # Page sections, components, data bindings
+    └── PROMPT.md               # paste this into Lovable
 ```
 
-## Setup order
+## Setup
 
-### 1. Supabase
+### Supabase (done)
+SQL files in `supabase/migrations/` ran in the SQL Editor. `seed.sql` populated the companies table.
 
-1. Create a new Supabase project
-2. In the SQL editor, run `supabase/migrations/001_initial_schema.sql`
-3. Run `supabase/migrations/002_rls_policies.sql`
-4. Update `supabase/seed.sql` with your `companies.json` rows, then run it
-5. Save the project URL and the `service_role` key (for n8n) and `anon` key (for Lovable)
+### n8n
+1. Create two credentials (must use these exact names):
+   - `Supabase (service_role)` — Host = Project URL, key = service_role secret
+   - `Anthropic API` — API key from console.anthropic.com
+2. Workflows → Import → `n8n/watchlist-workflow.json`
+3. Click each red-flagged node and re-pick the credential from the dropdown
+4. Supabase → companies → set `active=false` everywhere except Anthropic for first test
+5. Execute Workflow manually, verify rows in jobs and matches
+6. Re-activate companies, toggle workflow Active
 
-### 2. n8n
+### Lovable
+1. Connect Supabase (Project URL + anon key)
+2. Paste contents of `lovable/PROMPT.md`
+3. Iterate, publish
 
-1. Add credentials: Supabase (service_role key), Anthropic API
-2. Import `n8n/workflow-greenhouse.json`
-3. Verify the credential references resolve
-4. Test-run once manually before enabling the daily cron
-5. Extend with Lever and Ashby branches per `n8n/WORKFLOW.md`
+## Updating things
 
-### 3. Lovable
+- **New company**: add row to companies table in Supabase (or update companies.json and re-run seed.sql)
+- **Updated context**: just edit the Google Doc. Next run picks it up automatically.
+- **Application status**: edit the applications table in Supabase Studio (form coming later)
+- **Status enum**: interested → applied → screen → interview → offer / closed
 
-1. Connect your Supabase project
-2. Build the page per `lovable/page-spec.md`
-3. For the protected status-update form, gate it behind your Lovable auth (or skip and update via Supabase Studio for v1)
+## Cost
 
-## Adding a company
-
-1. Visit their careers page
-2. Identify the ATS:
-   - URL contains `boards.greenhouse.io/{slug}` or `job-boards.greenhouse.io/{slug}` → Greenhouse
-   - URL contains `jobs.lever.co/{slug}` → Lever
-   - URL contains `jobs.ashbyhq.com/{slug}` → Ashby
-   - URL contains `*.myworkdayjobs.com` → Workday (v2, not yet supported)
-3. Add the entry to `companies.json`
-4. Insert the row into Supabase `companies` table (or rerun seed.sql)
-
-## Updating application status
-
-Two options:
-- **Supabase Studio** — edit the `applications` row directly. Fine for v1.
-- **Lovable form** — add a small auth-gated form that POSTs to Supabase. Recommended once the basics work.
-
-Status values: `interested | applied | screen | interview | offer | closed`
-
-## Cost estimate
-
-- Supabase: free tier covers this easily
-- n8n: free if self-hosted, or your existing plan
-- Anthropic API: ~200 jobs/day × ~1500 tokens each (with cached system prompt) ≈ under $1/day. Prompt caching cuts this further once the master context doc is cached.
-
-## Open items
-
-- [ ] Verify each company's ATS slug against their actual careers page before going live
-- [ ] Decide on match threshold (default 70)
-- [ ] Decide if public page redacts anything (currently fully public)
-- [ ] Workday support (v2)
-- [ ] Realtime updates via Supabase subscriptions (v2)
+- Supabase: free tier
+- n8n: existing plan
+- Anthropic API: ~$0.50/day with prompt caching enabled
