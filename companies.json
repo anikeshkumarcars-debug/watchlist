@@ -1,0 +1,161 @@
+{
+  "version": 1,
+  "updated_at": "2026-05-30",
+  "_notes": {
+    "ats_types": ["greenhouse", "lever", "ashby", "workday"],
+    "tiers": ["dream", "strong", "explore"],
+    "slug_verification": "Visit each company's careers page and confirm the slug in the URL before going live. Slugs below are best-guesses; some may have changed.",
+    "how_to_find_slug": {
+      "greenhouse": "URL like boards.greenhouse.io/{slug} or job-boards.greenhouse.io/{slug}",
+      "lever": "URL like jobs.lever.co/{slug}",
+      "ashby": "URL like jobs.ashbyhq.com/{slug}",
+      "workday": "Hostname like {tenant}.wd1.myworkdayjobs.com/en-US/{site}"
+    }
+  },
+  "companies": [
+    {
+      "name": "Anthropic",
+      "ats_type": "greenhouse",
+      "ats_slug": "anthropic",
+      "tier": "dream",
+      "active": true,
+      "notes": "AI safety lab; PM roles, AI product roles"
+    },
+    {
+      "name": "OpenAI",
+      "ats_type": "greenhouse",
+      "ats_slug": "openai",
+      "tier": "dream",
+      "active": true,
+      "notes": "Verify slug"
+    },
+    {
+      "name": "Google DeepMind",
+      "ats_type": "workday",
+      "ats_slug": "google",
+      "tier": "dream",
+      "active": false,
+      "notes": "Workday; defer to v2"
+    },
+    {
+      "name": "NVIDIA",
+      "ats_type": "workday",
+      "ats_slug": "nvidia",
+      "tier": "dream",
+      "active": false,
+      "notes": "Workday; defer to v2. Long-stated dream employer."
+    },
+    {
+      "name": "Stripe",
+      "ats_type": "greenhouse",
+      "ats_slug": "stripe",
+      "tier": "strong",
+      "active": true,
+      "notes": null
+    },
+    {
+      "name": "Notion",
+      "ats_type": "greenhouse",
+      "ats_slug": "notion",
+      "tier": "strong",
+      "active": true,
+      "notes": "Verify slug"
+    },
+    {
+      "name": "Figma",
+      "ats_type": "greenhouse",
+      "ats_slug": "figma",
+      "tier": "strong",
+      "active": true,
+      "notes": "Verify slug"
+    },
+    {
+      "name": "Vercel",
+      "ats_type": "greenhouse",
+      "ats_slug": "vercel",
+      "tier": "strong",
+      "active": true,
+      "notes": "Verify slug"
+    },
+    {
+      "name": "Linear",
+      "ats_type": "ashby",
+      "ats_slug": "linear",
+      "tier": "strong",
+      "active": true,
+      "notes": null
+    },
+    {
+      "name": "Ramp",
+      "ats_type": "ashby",
+      "ats_slug": "ramp",
+      "tier": "strong",
+      "active": true,
+      "notes": null
+    },
+    {
+      "name": "Perplexity",
+      "ats_type": "ashby",
+      "ats_slug": "perplexity",
+      "tier": "strong",
+      "active": true,
+      "notes": "Verify slug and ATS"
+    },
+    {
+      "name": "Scale AI",
+      "ats_type": "greenhouse",
+      "ats_slug": "scaleai",
+      "tier": "strong",
+      "active": true,
+      "notes": "Verify slug"
+    },
+    {
+      "name": "Databricks",
+      "ats_type": "greenhouse",
+      "ats_slug": "databricks",
+      "tier": "strong",
+      "active": true,
+      "notes": "Verify slug"
+    },
+    {
+      "name": "Hugging Face",
+      "ats_type": "greenhouse",
+      "ats_slug": "huggingface",
+      "tier": "strong",
+      "active": true,
+      "notes": "Verify slug"
+    },
+    {
+      "name": "Airtable",
+      "ats_type": "greenhouse",
+      "ats_slug": "airtable",
+      "tier": "explore",
+      "active": true,
+      "notes": "Verify slug"
+    },
+    {
+      "name": "Datadog",
+      "ats_type": "greenhouse",
+      "ats_slug": "datadog",
+      "tier": "explore",
+      "active": true,
+      "notes": "Verify slug"
+    },
+    {
+      "name": "Asana",
+      "ats_type": "greenhouse",
+      "ats_slug": "asana",
+      "tier": "explore",
+      "active": true,
+      "notes": "Verify slug"
+    },
+    {
+      "name": "Garmin",
+      "ats_type": "workday",
+      "ats_slug": "garmin",
+      "tier": "explore",
+      "active": false,
+      "notes": "Workday; Dive Applications PM role is the wedge. Defer to v2."
+    }
+  ]
+}
