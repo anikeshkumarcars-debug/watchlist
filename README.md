@@ -18,8 +18,7 @@ GitHub Actions (7 AM PT daily)
 
 ## Setup (one time)
 
-### Supabase (done)
-SQL files in `supabase/migrations/` ran in the SQL Editor. `seed.sql` populated the companies table.
+### 1. Supabase
 
 Run these SQL files in order in your Supabase SQL Editor:
 
