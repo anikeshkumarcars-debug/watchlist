@@ -1,73 +1,131 @@
-# Watchlist
+# Watchlist Pipeline
 
-A live, public view of where I'm applying and which roles I'm tracking this week.
+GitHub Actions cron job that fetches open PM roles from ATS APIs, scores them via Claude API, and upserts results into Supabase. The Lovable frontend at [watchlist-product-management.lovable.app](https://watchlist-product-management.lovable.app) reads from Supabase and displays the live board.
 
-## Stack
-
-- **GitHub** — source of truth for schema, prompts, workflow, company list
-- **Supabase** — runtime data: jobs, scores, application status
-- **n8n** — daily cron that fetches jobs, scores them with Claude, upserts to Supabase
-- **Lovable** — public frontend that reads from Supabase
-- **Google Docs** — master context (resume + historical context) fetched live each run
-
-## How it works
-
-Once daily, n8n:
-1. Pulls the latest resume and master context from Google Docs (always fresh, no hardcoding)
-2. Reads the active company list from Supabase
-3. Hits each company's ATS API
-4. For every new posting, calls Claude to score role/level/location fit
-5. Upserts jobs and matches into Supabase
-6. Closes postings that disappeared
-
-Lovable reads from Supabase and renders three sections: companies tracked, open matches, application pipeline.
-
-## Repo layout
+**Architecture:**
 
 ```
-.
-├── README.md
-├── companies.json              # source list
-├── supabase/
-│   ├── migrations/             # schema + RLS policies
-│   └── seed.sql                # inserts companies.json
-├── n8n/
-│   └── watchlist-workflow.json # importable workflow with Google Docs fetching
-├── prompts/
-│   └── scoring-prompt.md       # documentation of the prompt (live version is in workflow)
-└── lovable/
-    └── PROMPT.md               # paste this into Lovable
+GitHub Actions (7 AM PT daily)
+  └─ fetch_and_score.py
+       ├─ pulls companies from Supabase
+       ├─ fetches postings from Greenhouse / Ashby / Lever / Workday
+       ├─ scores each new job via Claude Haiku
+       └─ upserts jobs + matches into Supabase
+            └─ Lovable reads v_watchlist view → public board
 ```
 
-## Setup
+---
+
+## Setup (one time)
 
 ### Supabase (done)
 SQL files in `supabase/migrations/` ran in the SQL Editor. `seed.sql` populated the companies table.
 
-### n8n
-1. Create two credentials (must use these exact names):
-   - `Supabase (service_role)` — Host = Project URL, key = service_role secret
-   - `Anthropic API` — API key from console.anthropic.com
-2. Workflows → Import → `n8n/watchlist-workflow.json`
-3. Click each red-flagged node and re-pick the credential from the dropdown
-4. Supabase → companies → set `active=false` everywhere except Anthropic for first test
-5. Execute Workflow manually, verify rows in jobs and matches
-6. Re-activate companies, toggle workflow Active
+Run these SQL files in order in your Supabase SQL Editor:
 
-### Lovable
-1. Connect Supabase (Project URL + anon key)
-2. Paste contents of `lovable/PROMPT.md`
-3. Iterate, publish
+```
+sql/001_initial_schema.sql   — tables + v_watchlist view
+sql/002_rls_policies.sql     — public read, no anon writes
+sql/003_apply_rpc.sql        — password-gated mark_application() RPC
+sql/seed.sql                 — initial company list
+```
 
-## Updating things
+Then set your apply password (run in Supabase SQL Editor):
+```sql
+select set_apply_password('your-password-here');
+```
 
-- **New company**: add row to companies table in Supabase (or update companies.json and re-run seed.sql)
-- **Updated context**: just edit the Google Doc. Next run picks it up automatically.
-- **Application status**: edit the applications table in Supabase Studio (form coming later)
-- **Status enum**: interested → applied → screen → interview → offer / closed
+### 2. GitHub repo
 
-## Cost
+Create a new private repo (or use this one). Push this folder.
 
-- Supabase: free tier
-- n8n: existing plan
-- Anthropic API: ~$0.50/day with prompt caching enabled
+### 3. GitHub Secrets
+
+Go to **Settings → Secrets → Actions** and add:
+
+| Secret name           | Where to find it |
+|-----------------------|-----------------|
+| `SUPABASE_URL`        | Supabase → Project Settings → API → Project URL |
+| `SUPABASE_SERVICE_KEY`| Supabase → Project Settings → API → service_role key (not anon) |
+| `ANTHROPIC_API_KEY`   | console.anthropic.com → API Keys |
+
+### 4. Trigger a manual run
+
+Go to **Actions → Watchlist — daily job fetch + score → Run workflow**.
+
+Set **dry_run = true** first to validate the fetch without writing to DB. Check the logs. If companies and job counts look right, run again with dry_run = false.
+
+### 5. Verify in Supabase
+
+```sql
+-- Check what got populated
+select count(*) from jobs;
+select count(*) from matches;
+select * from v_watchlist order by score desc limit 10;
+```
+
+---
+
+## Updating companies
+
+Edit `sql/seed.sql` and re-run it in Supabase SQL Editor. The `ON CONFLICT` clause makes it idempotent — existing rows update, new ones insert. To disable a company without deleting it:
+
+```sql
+update companies set active = false where name = 'Acme Corp';
+```
+
+To add a new company inline (without editing seed.sql):
+
+```sql
+insert into companies (name, ats_type, ats_slug, tier, active, source, notes)
+values ('Retool', 'greenhouse', 'retool', 'strong', true, 'manual', null)
+on conflict (ats_type, ats_slug) do nothing;
+```
+
+### Finding ATS slugs
+
+- **Greenhouse**: visit `boards.greenhouse.io/{slug}` — the slug is in the URL on their careers page
+- **Ashby**: visit `jobs.ashbyhq.com/{slug}` — same pattern
+- **Lever**: visit `jobs.lever.co/{slug}`
+- **Workday**: trickier — visit their careers page, look at the URL: `{tenant}.wd{N}.myworkdayjobs.com/en-US/{site}` → slug = `wd{N}/{tenant}/{site}`
+
+---
+
+## Tuning the scorer
+
+The candidate profile is in `scripts/fetch_and_score.py` at the top (`CANDIDATE_PROFILE`). Update it as your experience changes.
+
+`SCORE_THRESHOLD` (default 60) controls the minimum score stored as a match. Jobs below this are still stored in `jobs` but won't appear in `v_watchlist` (which requires a match row). Raise to 70 to keep the board cleaner; lower to 50 to see more.
+
+The scorer uses **Claude Haiku** (fast, cheap). A full daily run across ~35 companies with 10-20 new jobs each costs roughly $0.01-0.05 in API tokens.
+
+---
+
+## Workday note
+
+Workday has no public API. The pipeline uses an undocumented endpoint that powers their own career pages. Some tenants block this. If a Workday company shows 0 jobs and you know they're hiring, check the slug in seed.sql — tenant names and site names vary. The `active = false` flag in seed.sql on Garmin and Google is intentional until slugs are verified.
+
+---
+
+## Cron schedule
+
+Runs at 7 AM PT daily (`0 14 * * *` UTC). To change it, edit `.github/workflows/daily.yml`. GitHub Actions schedules can drift by up to 15 minutes under load.
+
+---
+
+## File structure
+
+```
+.github/
+  workflows/
+    daily.yml           — cron + manual trigger
+scripts/
+  fetch_and_score.py   — main pipeline
+sql/
+  001_initial_schema.sql
+  002_rls_policies.sql
+  003_apply_rpc.sql
+  seed.sql
+requirements.txt
+README.md
+```
