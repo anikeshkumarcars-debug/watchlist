@@ -2,27 +2,20 @@
 """
 fetch_and_score.py
 ------------------
-Pulls open jobs from each ATS, scores them via Claude API,
-and upserts results into Supabase.
+Pulls open jobs from each ATS, filters by PM title + US location + recency,
+scores only relevant ones via Claude Haiku, upserts into Supabase.
 
-Supported ATS:
-  - Greenhouse (boards-api.greenhouse.io)
-  - Ashby     (api.ashbyhq.com)
-  - Lever     (api.lever.co)
-  - Workday   (careers.{subdomain}.com — HTML scrape, best-effort)
-
-Env vars required (set as GitHub Actions secrets):
-  SUPABASE_URL          e.g. https://xxxx.supabase.co
-  SUPABASE_SERVICE_KEY  service_role key (bypasses RLS for writes)
+Env vars (GitHub Actions secrets):
+  SUPABASE_URL          https://xxxx.supabase.co
+  SUPABASE_SERVICE_KEY  service_role key
   ANTHROPIC_API_KEY     Claude API key
 
 Optional:
-  SCORE_THRESHOLD       Minimum score to upsert a match (default: 60)
-  DRY_RUN               Set to "true" to skip DB writes (log only)
+  SCORE_THRESHOLD       Min score to store a match (default: 65)
 """
 
-import os, sys, json, time, logging, hashlib, re
-from datetime import datetime, timezone
+import os, json, time, logging, re
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 import httpx
 
@@ -33,22 +26,22 @@ logging.basicConfig(
 )
 log = logging.getLogger("watchlist")
 
-# ── Config ────────────────────────────────────────────────────────────────────
+# ── Config ─────────────────────────────────────────────────────────────────────
 
-SUPABASE_URL        = os.environ["SUPABASE_URL"].rstrip("/")
+SUPABASE_URL         = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
-ANTHROPIC_API_KEY   = os.environ["ANTHROPIC_API_KEY"]
-SCORE_THRESHOLD     = int(os.getenv("SCORE_THRESHOLD", "60"))
-DRY_RUN             = os.getenv("DRY_RUN", "false").lower() == "true"
+ANTHROPIC_API_KEY    = os.environ["ANTHROPIC_API_KEY"]
+SCORE_THRESHOLD      = int(os.getenv("SCORE_THRESHOLD", "65"))
 
 HEADERS_SB = {
     "apikey": SUPABASE_SERVICE_KEY,
     "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
     "Content-Type": "application/json",
-    "Prefer": "resolution=merge-duplicates,return=minimal",
 }
 
-# ── Candidate profile (edit this to match your resume) ────────────────────────
+CUTOFF_HOURS = 26  # slightly over 24h to avoid missing jobs near the boundary
+
+# ── Candidate profile ──────────────────────────────────────────────────────────
 
 CANDIDATE_PROFILE = """
 Name: Shailvi Kumar
@@ -59,35 +52,115 @@ Background:
   - AWS Senior TPM intern: Amazon Linux PathFinder (OS upgrade advisor product)
   - GIVE: Product Owner, OKR roadmap, PRD authorship, HDFC Bank ML pipeline
   - Builder: shipped Daybreak (GitHub Actions + Claude API autonomous digest),
-    Tailorbot (n8n agentic workflow, JD → resume diff + cover letter),
-    Dossier (LinkedIn → pre-meeting brief), Sightline + Tidepool (Lovable prototypes)
-Strong suits: AI/ML product, 0→1 builds, technical depth, cross-functional leadership
+    Tailorbot (n8n agentic workflow, JD to resume diff + cover letter),
+    Dossier (LinkedIn to pre-meeting brief), Sightline + Tidepool (Lovable prototypes)
+Strong suits: AI/ML product, 0-to-1 builds, technical depth, cross-functional leadership
 Location preference: San Francisco Bay Area / Los Angeles / Remote
 Seniority: Mid to Senior IC (no VP/Director roles)
 """
 
-# ── ATS Fetchers ──────────────────────────────────────────────────────────────
+# ── Filters ────────────────────────────────────────────────────────────────────
+
+PM_KEYWORDS = [
+    "product manager",
+    "product management",
+    "senior pm",
+    "pm ii",
+    "pm i",
+    "pm 2",
+    "pm 1",
+    "product lead",
+    "product builder",
+]
+
+EXCLUDE_KEYWORDS = [
+    "director", "vp ", "vice president", "head of product", "chief product",
+    "intern", "apprentice", "principal pm", "group product manager",
+    "technical program manager", "program manager", "marketing", "designer",
+    "engineer", "scientist", "analyst", "counsel", "recruiter", "operations",
+    "account executive", "account manager", "sales", "support", "coordinator",
+]
+
+TARGET_LOCATIONS = [
+    "san francisco", "bay area", "san jose", "mountain view", "palo alto",
+    "menlo park", "sunnyvale", "redwood city", "seattle", "austin", "boston",
+    "new york", "nyc", "los angeles", "irvine", "culver city", "chicago",
+    "remote", "hybrid", "united states", "usa", ", ca", ", wa", ", ny",
+    ", tx", ", ma", ", il", ", or",
+]
+
+
+def is_pm_role(title: str) -> bool:
+    t = title.lower()
+    if not any(k in t for k in PM_KEYWORDS):
+        return False
+    if any(k in t for k in EXCLUDE_KEYWORDS):
+        return False
+    return True
+
+
+def is_target_location(location: str) -> bool:
+    if not location or location.strip() == "":
+        return True
+    return any(k in location.lower() for k in TARGET_LOCATIONS)
+
+
+def is_recent(posted_at: Optional[str], cutoff: datetime) -> bool:
+    """Return True if posted_at is within the cutoff window, or if date is unknown."""
+    if not posted_at:
+        return True  # no date = keep it, we can't tell
+    try:
+        dt = datetime.fromisoformat(posted_at.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt >= cutoff
+    except Exception:
+        return True  # parse failure = keep it
+
+
+def should_keep(title: str, location: str, posted_at: Optional[str], cutoff: Optional[datetime]) -> bool:
+    if not is_pm_role(title):
+        return False
+    if not is_target_location(location):
+        return False
+    if cutoff and not is_recent(posted_at, cutoff):
+        return False
+    return True
+
+
+# ── ATS Fetchers ───────────────────────────────────────────────────────────────
 
 def fetch_greenhouse(slug: str) -> list[dict]:
-    url = f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true"
+    url = f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs"
     try:
         r = httpx.get(url, timeout=20)
         r.raise_for_status()
-        jobs = r.json().get("jobs", [])
         return [
             {
                 "ats_job_id": str(j["id"]),
-                "title": j.get("title", ""),
-                "location": (j.get("location") or {}).get("name", ""),
-                "url": j.get("absolute_url", ""),
-                "posted_at": j.get("updated_at"),
-                "raw_jd": _strip_html(j.get("content", "")),
+                "title":      j.get("title", ""),
+                "location":   (j.get("location") or {}).get("name", ""),
+                "url":        j.get("absolute_url", ""),
+                "posted_at":  j.get("updated_at"),
+                "raw_jd":     "",
             }
-            for j in jobs
+            for j in r.json().get("jobs", [])
         ]
     except Exception as e:
         log.warning(f"Greenhouse {slug}: {e}")
         return []
+
+
+def fetch_greenhouse_jd(job_id: str, slug: str) -> str:
+    try:
+        r = httpx.get(
+            f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs/{job_id}",
+            timeout=15,
+        )
+        r.raise_for_status()
+        return _strip_html(r.json().get("content", ""))
+    except Exception:
+        return ""
 
 
 def fetch_ashby(slug: str) -> list[dict]:
@@ -95,18 +168,17 @@ def fetch_ashby(slug: str) -> list[dict]:
     try:
         r = httpx.get(url, timeout=20)
         r.raise_for_status()
-        jobs = r.json().get("jobPostings", [])
         return [
             {
                 "ats_job_id": j.get("id", ""),
-                "title": j.get("title", ""),
-                "location": j.get("locationName", ""),
-                "url": j.get("jobUrl", ""),
-                "posted_at": j.get("publishedAt"),
-                "raw_jd": _strip_html(j.get("descriptionHtml", "")),
+                "title":      j.get("title", ""),
+                "location":   j.get("locationName", ""),
+                "url":        j.get("jobUrl", ""),
+                "posted_at":  j.get("publishedAt"),
+                "raw_jd":     _strip_html(j.get("descriptionHtml", "")),
             }
-            for j in jobs
-            if not j.get("isListed") == False
+            for j in r.json().get("jobPostings", [])
+            if j.get("isListed") is not False
         ]
     except Exception as e:
         log.warning(f"Ashby {slug}: {e}")
@@ -118,66 +190,21 @@ def fetch_lever(slug: str) -> list[dict]:
     try:
         r = httpx.get(url, timeout=20)
         r.raise_for_status()
-        jobs = r.json()
         return [
             {
                 "ats_job_id": j.get("id", ""),
-                "title": j.get("text", ""),
-                "location": (j.get("categories") or {}).get("location", ""),
-                "url": j.get("hostedUrl", ""),
-                "posted_at": datetime.fromtimestamp(
-                    j["createdAt"] / 1000, tz=timezone.utc
-                ).isoformat() if j.get("createdAt") else None,
-                "raw_jd": _strip_html(
-                    " ".join(
-                        (l.get("content") or "") + " "
-                        + " ".join(b.get("content", []) for b in l.get("lists", []))
-                        for l in (j.get("descriptionBody", {}).get("body") or [])
-                    )
-                ),
+                "title":      j.get("text", ""),
+                "location":   (j.get("categories") or {}).get("location", ""),
+                "url":        j.get("hostedUrl", ""),
+                "posted_at":  datetime.fromtimestamp(
+                                  j["createdAt"] / 1000, tz=timezone.utc
+                              ).isoformat() if j.get("createdAt") else None,
+                "raw_jd":     "",
             }
-            for j in jobs
+            for j in r.json()
         ]
     except Exception as e:
         log.warning(f"Lever {slug}: {e}")
-        return []
-
-
-def fetch_workday(slug: str) -> list[dict]:
-    """
-    Workday has no public API. slug format: 'host_subdomain/tenant/site'
-    e.g. 'wd5/garmin/External'
-    We use their unofficial jobs API endpoint (used by their own career pages).
-    This is best-effort; some tenants block scrapers.
-    """
-    parts = slug.split("/")
-    if len(parts) < 3:
-        log.warning(f"Workday slug format invalid: {slug} — expected host/tenant/site")
-        return []
-    host, tenant, site = parts[0], parts[1], "/".join(parts[2:])
-    url = (
-        f"https://{tenant}.wd{host.replace('wd','')}.myworkdayjobs.com/wday/cxs/"
-        f"{tenant}/{site}/jobs"
-    )
-    payload = {"limit": 20, "offset": 0, "searchText": "product manager"}
-    try:
-        r = httpx.post(url, json=payload, timeout=30)
-        r.raise_for_status()
-        jobs = r.json().get("jobPostings", [])
-        return [
-            {
-                "ats_job_id": j.get("bulletFields", [""])[0] or j.get("title", ""),
-                "title": j.get("title", ""),
-                "location": j.get("locationsText", ""),
-                "url": f"https://{tenant}.wd{host.replace('wd','')}.myworkdayjobs.com/en-US/{site}/job/"
-                       + j.get("externalPath", "").lstrip("/"),
-                "posted_at": j.get("postedOn"),
-                "raw_jd": "",
-            }
-            for j in jobs
-        ]
-    except Exception as e:
-        log.warning(f"Workday {slug}: {e}")
         return []
 
 
@@ -185,33 +212,32 @@ ATS_FETCHERS = {
     "greenhouse": fetch_greenhouse,
     "ashby":      fetch_ashby,
     "lever":      fetch_lever,
-    "workday":    fetch_workday,
 }
 
 # ── Claude Scoring ─────────────────────────────────────────────────────────────
 
-SCORE_SYSTEM = """You are a job-fit evaluator. Given a candidate profile and a job posting,
-output ONLY valid JSON — no markdown, no commentary, no explanation. 
-The JSON must have exactly these fields:
+SCORE_SYSTEM = """You are a job-fit evaluator. Output ONLY valid JSON, no markdown, no explanation.
+Exactly these fields:
   score        (integer 0-100)
   role_fit     ("strong" | "moderate" | "weak")
   level_fit    ("strong" | "moderate" | "weak")
   location_fit ("strong" | "moderate" | "weak")
-  reasoning    (string, max 120 chars, plain English, no em dashes)
+  reasoning    (string, max 100 chars, plain English)
 
 Score rubric:
-  90-100: excellent fit across role, level, and location
+  90-100: excellent fit across role, level, location
   80-89:  strong fit, minor gaps
-  70-79:  good candidate but notable gaps
-  60-69:  borderline — worth tracking but not prioritizing
-  <60:    poor fit
+  70-79:  good but notable gaps
+  65-69:  borderline, worth tracking
+  <65:    poor fit
 """
 
+
 def score_job(title: str, location: str, raw_jd: str) -> Optional[dict]:
-    jd_snippet = (raw_jd or "")[:3000]
     prompt = (
         f"CANDIDATE:\n{CANDIDATE_PROFILE}\n\n"
-        f"JOB:\nTitle: {title}\nLocation: {location}\n\nDescription:\n{jd_snippet}"
+        f"JOB:\nTitle: {title}\nLocation: {location}\n\n"
+        f"Description:\n{(raw_jd or '')[:2000]}"
     )
     try:
         r = httpx.post(
@@ -223,37 +249,40 @@ def score_job(title: str, location: str, raw_jd: str) -> Optional[dict]:
             },
             json={
                 "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 300,
+                "max_tokens": 200,
                 "system": SCORE_SYSTEM,
                 "messages": [{"role": "user", "content": prompt}],
             },
             timeout=30,
         )
         r.raise_for_status()
-        raw = r.json()["content"][0]["text"].strip()
-        return json.loads(raw)
+        text = r.json()["content"][0]["text"].strip()
+        text = re.sub(r"^```json\s*|\s*```$", "", text, flags=re.MULTILINE).strip()
+        return json.loads(text)
     except Exception as e:
         log.warning(f"Score failed for '{title}': {e}")
         return None
 
 
-# ── Supabase helpers ──────────────────────────────────────────────────────────
+# ── Supabase helpers ───────────────────────────────────────────────────────────
 
 def sb_get(path: str, params: dict = None) -> list[dict]:
-    r = httpx.get(f"{SUPABASE_URL}/rest/v1/{path}", headers=HEADERS_SB, params=params, timeout=20)
+    r = httpx.get(
+        f"{SUPABASE_URL}/rest/v1/{path}",
+        headers=HEADERS_SB,
+        params=params,
+        timeout=20,
+    )
     r.raise_for_status()
     return r.json()
 
 
 def sb_upsert(table: str, rows: list[dict], on_conflict: str):
-    if DRY_RUN:
-        log.info(f"[DRY RUN] would upsert {len(rows)} rows into {table}")
-        return
     if not rows:
         return
     r = httpx.post(
         f"{SUPABASE_URL}/rest/v1/{table}",
-        headers={**HEADERS_SB, "Prefer": f"resolution=merge-duplicates,return=minimal"},
+        headers={**HEADERS_SB, "Prefer": "resolution=merge-duplicates,return=minimal"},
         params={"on_conflict": on_conflict},
         json=rows,
         timeout=30,
@@ -261,17 +290,14 @@ def sb_upsert(table: str, rows: list[dict], on_conflict: str):
     if r.status_code not in (200, 201):
         log.error(f"Upsert {table} failed: {r.status_code} {r.text[:300]}")
     else:
-        log.info(f"  upserted {len(rows)} rows → {table}")
+        log.info(f"  upserted {len(rows)} rows -> {table}")
 
 
 def sb_patch(table: str, filters: dict, data: dict):
-    if DRY_RUN:
-        return
-    params = {k: f"eq.{v}" for k, v in filters.items()}
     r = httpx.patch(
         f"{SUPABASE_URL}/rest/v1/{table}",
         headers=HEADERS_SB,
-        params=params,
+        params={k: f"eq.{v}" for k, v in filters.items()},
         json=data,
         timeout=20,
     )
@@ -279,128 +305,153 @@ def sb_patch(table: str, filters: dict, data: dict):
         log.warning(f"PATCH {table} {filters}: {r.status_code} {r.text[:200]}")
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
     log.info("=== Watchlist pipeline starting ===")
-    if DRY_RUN:
-        log.info("DRY RUN mode — no DB writes")
 
-    # 1. Load active companies from Supabase
     companies = sb_get("companies", {"active": "eq.true", "select": "*"})
     log.info(f"Loaded {len(companies)} active companies")
 
-    # 2. Load existing jobs to detect closed ones
-    existing_jobs = sb_get(
-        "jobs", {"status": "eq.open", "select": "id,company_id,ats_job_id"}
-    )
-    existing_map = {(j["company_id"], j["ats_job_id"]): j["id"] for j in existing_jobs}
-    seen_this_run: set[tuple] = set()
+    # Load existing open jobs for closed-detection
+    existing_jobs = sb_get("jobs", {"status": "eq.open", "select": "id,company_id,ats_job_id"})
+    existing_map  = {(j["company_id"], j["ats_job_id"]): j["id"] for j in existing_jobs}
 
-    total_new, total_scored = 0, 0
+    # Build a set of company_ids that already have jobs in the DB
+    # These get the 26h recency filter; new companies get all jobs on first run
+    companies_with_jobs = {j["company_id"] for j in existing_jobs}
+
+    seen_this_run: set[tuple] = set()
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=CUTOFF_HOURS)
+
+    total_fetched = total_kept = total_scored = 0
 
     for co in companies:
-        co_id    = co["id"]
-        co_name  = co["name"]
-        ats_type = co["ats_type"]
-        ats_slug = co["ats_slug"]
+        co_id, co_name, ats_type, ats_slug = (
+            co["id"], co["name"], co["ats_type"], co["ats_slug"]
+        )
 
         fetcher = ATS_FETCHERS.get(ats_type)
         if not fetcher:
-            log.warning(f"No fetcher for ATS type '{ats_type}' ({co_name})")
+            log.warning(f"No fetcher for {ats_type} ({co_name}) — skipping")
             continue
 
-        log.info(f"→ {co_name} ({ats_type}/{ats_slug})")
+        # First-time companies get no date filter so we seed the DB properly
+        is_first_run = co_id not in companies_with_jobs
+        active_cutoff = None if is_first_run else cutoff
+
+        if is_first_run:
+            log.info(f"-> {co_name} ({ats_type}/{ats_slug}) [FIRST RUN — no date filter]")
+        else:
+            log.info(f"-> {co_name} ({ats_type}/{ats_slug})")
+
         postings = fetcher(ats_slug)
-        log.info(f"  fetched {len(postings)} postings")
+        total_fetched += len(postings)
 
-        if not postings:
+        # Apply PM + location + recency filter
+        relevant = [
+            p for p in postings
+            if p.get("ats_job_id") and p.get("title")
+            and should_keep(p["title"], p.get("location", ""), p.get("posted_at"), active_cutoff)
+        ]
+        log.info(f"  {len(postings)} fetched -> {len(relevant)} kept after filter")
+        total_kept += len(relevant)
+
+        # Track all fetched job IDs for closed-detection regardless
+        for p in postings:
+            if p.get("ats_job_id"):
+                seen_this_run.add((co_id, p["ats_job_id"]))
+
+        if not relevant:
+            time.sleep(0.5)
             continue
 
-        # Upsert jobs
-        job_rows = [
+        # Fetch full JD for Greenhouse PM roles only
+        if ats_type == "greenhouse":
+            for p in relevant:
+                p["raw_jd"] = fetch_greenhouse_jd(p["ats_job_id"], ats_slug)
+                time.sleep(0.2)
+
+        now = datetime.now(timezone.utc).isoformat()
+
+        sb_upsert("jobs", [
             {
-                "company_id": co_id,
-                "ats_job_id": p["ats_job_id"],
-                "title":      p["title"],
-                "location":   p.get("location", ""),
-                "url":        p["url"],
-                "posted_at":  p.get("posted_at"),
-                "last_seen_at": datetime.now(timezone.utc).isoformat(),
-                "status":     "open",
-                "raw_jd":     (p.get("raw_jd") or "")[:10000],
+                "company_id":   co_id,
+                "ats_job_id":   p["ats_job_id"],
+                "title":        p["title"],
+                "location":     p.get("location", ""),
+                "url":          p["url"],
+                "posted_at":    p.get("posted_at"),
+                "last_seen_at": now,
+                "status":       "open",
+                "raw_jd":       (p.get("raw_jd") or "")[:10000],
             }
-            for p in postings
-            if p.get("ats_job_id") and p.get("title")
-        ]
-        sb_upsert("jobs", job_rows, "company_id,ats_job_id")
+            for p in relevant
+        ], "company_id,ats_job_id")
 
-        # Track what we saw
-        for p in postings:
-            seen_this_run.add((co_id, p["ats_job_id"]))
+        # Score jobs that don't have a match yet
+        co_jobs = sb_get("jobs", {
+            "company_id": f"eq.{co_id}",
+            "status":     "eq.open",
+            "select":     "id,title,location,raw_jd",
+        })
+        if not co_jobs:
+            time.sleep(0.5)
+            continue
 
-        # Score new jobs that don't have a match yet
-        if not DRY_RUN:
-            # Reload jobs for this company (need UUIDs)
-            co_jobs = sb_get("jobs", {
-                "company_id": f"eq.{co_id}",
-                "status": "eq.open",
-                "select": "id,ats_job_id,title,location,raw_jd",
+        job_ids_csv = ",".join(j["id"] for j in co_jobs)
+        matched_ids = {
+            m["job_id"]
+            for m in sb_get("matches", {
+                "job_id": f"in.({job_ids_csv})",
+                "select": "job_id",
             })
-            # Find which have no match yet
-            matched_ids = {
-                m["job_id"]
-                for m in sb_get("matches", {
-                    "job_id": f"in.({','.join(j['id'] for j in co_jobs)})" if co_jobs else "eq.00000000-0000-0000-0000-000000000000",
-                    "select": "job_id",
+        }
+
+        to_score = [j for j in co_jobs if j["id"] not in matched_ids]
+        log.info(f"  {len(to_score)} unscored -> scoring")
+
+        match_rows = []
+        for job in to_score:
+            result = score_job(job["title"], job.get("location", ""), job.get("raw_jd", ""))
+            if result and isinstance(result.get("score"), int) and result["score"] >= SCORE_THRESHOLD:
+                match_rows.append({
+                    "job_id":       job["id"],
+                    "score":        result["score"],
+                    "role_fit":     result.get("role_fit"),
+                    "level_fit":    result.get("level_fit"),
+                    "location_fit": result.get("location_fit"),
+                    "reasoning":    result.get("reasoning", ""),
+                    "scored_at":    now,
                 })
-            } if co_jobs else set()
+                total_scored += 1
+                log.info(f"    {result['score']}: {job['title']}")
+            time.sleep(0.5)
 
-            to_score = [j for j in co_jobs if j["id"] not in matched_ids]
-            log.info(f"  {len(to_score)} jobs to score")
+        if match_rows:
+            sb_upsert("matches", match_rows, "job_id")
 
-            match_rows = []
-            for job in to_score:
-                result = score_job(job["title"], job.get("location", ""), job.get("raw_jd", ""))
-                if result and result.get("score", 0) >= SCORE_THRESHOLD:
-                    match_rows.append({
-                        "job_id":       job["id"],
-                        "score":        result["score"],
-                        "role_fit":     result.get("role_fit"),
-                        "level_fit":    result.get("level_fit"),
-                        "location_fit": result.get("location_fit"),
-                        "reasoning":    result.get("reasoning", ""),
-                        "scored_at":    datetime.now(timezone.utc).isoformat(),
-                    })
-                    total_scored += 1
-                time.sleep(0.3)  # gentle rate limit
+        time.sleep(1)
 
-            if match_rows:
-                sb_upsert("matches", match_rows, "job_id")
-            total_new += len(to_score)
-
-        time.sleep(1)  # be polite between companies
-
-    # 3. Mark jobs as closed if they disappeared from the ATS
+    # Mark jobs that disappeared from ATS as closed
+    closed_count = 0
     for (co_id, ats_job_id), job_id in existing_map.items():
         if (co_id, ats_job_id) not in seen_this_run:
-            log.info(f"  marking closed: {ats_job_id}")
             sb_patch("jobs", {"id": job_id}, {"status": "closed"})
+            closed_count += 1
 
     log.info(
-        f"=== Done. {total_new} new jobs encountered, "
-        f"{total_scored} scored above threshold ({SCORE_THRESHOLD}) ==="
+        f"=== Done. fetched={total_fetched} kept={total_kept} "
+        f"scored={total_scored} closed={closed_count} ==="
     )
 
 
-# ── Utilities ─────────────────────────────────────────────────────────────────
+# ── Utilities ──────────────────────────────────────────────────────────────────
 
 def _strip_html(text: str) -> str:
     if not text:
         return ""
-    clean = re.sub(r"<[^>]+>", " ", text)
-    clean = re.sub(r"\s+", " ", clean)
-    return clean.strip()
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text)).strip()
 
 
 if __name__ == "__main__":
