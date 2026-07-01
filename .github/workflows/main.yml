@@ -9,7 +9,7 @@ jobs:
   fetch-and-score:
     name: Fetch jobs + score with Claude
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 120
 
     steps:
       - name: Checkout
