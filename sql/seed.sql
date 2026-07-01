@@ -8,51 +8,52 @@
 --   lever:      'spotify'
 --   workday:    'wd5/garmin/External' (host subdomain / tenant / site)
 --
--- Note: slugs marked "verify" in notes need to be confirmed against each
--- company's live careers page before enabling. Visit careers.{company}.com
--- and check the URL pattern. Workday slugs especially vary by tenant.
+-- Slugs below were cross-checked against a bulk ATS company-slug dataset
+-- (July 2026) — see data/*.csv and scripts/expand_companies.py. Several of
+-- the original "verify slug" guesses were wrong; those are marked "corrected"
+-- below rather than "verify slug".
 
 insert into companies (name, ats_type, ats_slug, tier, active, source, notes) values
   -- ─── Dream (AI labs) ───
   ('Anthropic',       'greenhouse', 'anthropic',    'dream',   true,  'manual', 'AI safety lab'),
-  ('OpenAI',          'greenhouse', 'openai',       'dream',   true,  'manual', 'verify slug'),
-  ('Google DeepMind', 'workday',    'wd5/google/External',  'dream', false, 'manual', 'Workday; verify tenant + site'),
-  ('NVIDIA',          'workday',    'wd5/nvidia/NVIDIAExternalCareerSite', 'dream', false, 'manual', 'Workday; verify site name'),
+  ('OpenAI',          'ashby',      'openai',       'dream',   true,  'manual', 'corrected: was greenhouse, actually ashby'),
+  ('Google DeepMind', 'workday',    'wd5/google/External',  'dream', false, 'manual', 'Workday; not in ATS dataset — Google uses a custom careers site, not myworkdayjobs.com. Verify manually.'),
+  ('NVIDIA',          'workday',    'wd5/nvidia/nvidiaexternalcareersite', 'dream', true,  'manual', 'Workday; slug verified against ATS dataset'),
   ('Mistral',         'ashby',      'mistral',      'dream',   true,  'manual', 'AI lab, Paris'),
-  ('Cohere',          'greenhouse', 'cohere',       'dream',   true,  'manual', 'verify slug'),
+  ('Cohere',          'ashby',      'cohere',       'dream',   true,  'manual', 'corrected: was greenhouse, actually ashby'),
 
   -- ─── Strong (high-impact AI + AI-adjacent) ───
   ('Stripe',          'greenhouse', 'stripe',       'strong',  true,  'manual', null),
-  ('Notion',          'greenhouse', 'notion',       'strong',  true,  'manual', 'verify slug'),
-  ('Figma',           'greenhouse', 'figma',        'strong',  true,  'manual', 'verify slug'),
-  ('Vercel',          'greenhouse', 'vercel',       'strong',  true,  'manual', 'verify slug'),
+  ('Notion',          'ashby',      'notion',       'strong',  true,  'manual', 'corrected: was greenhouse, actually ashby'),
+  ('Figma',           'greenhouse', 'figma',        'strong',  true,  'manual', 'slug verified'),
+  ('Vercel',          'greenhouse', 'vercel',       'strong',  true,  'manual', 'slug verified'),
   ('Linear',          'ashby',      'linear',       'strong',  true,  'manual', null),
   ('Ramp',            'ashby',      'ramp',         'strong',  true,  'manual', null),
-  ('Perplexity',      'ashby',      'perplexity',   'strong',  true,  'manual', 'verify slug'),
-  ('Scale AI',        'greenhouse', 'scaleai',      'strong',  true,  'manual', 'verify slug'),
-  ('Databricks',      'greenhouse', 'databricks',   'strong',  true,  'manual', 'verify slug'),
-  ('Hugging Face',    'greenhouse', 'huggingface',  'strong',  true,  'manual', 'verify slug'),
-  ('Character.AI',    'ashby',      'character',    'strong',  true,  'manual', 'verify slug'),
-  ('Cursor',          'ashby',      'anysphere',    'strong',  true,  'manual', 'parent co Anysphere'),
-  ('Glean',           'greenhouse', 'glean',        'strong',  true,  'manual', 'verify slug'),
-  ('Harvey',          'ashby',      'harvey',       'strong',  true,  'manual', 'verify slug'),
-  ('ElevenLabs',      'greenhouse', 'elevenlabs',   'strong',  true,  'manual', 'verify slug'),
-  ('Runway',          'ashby',      'runwayml',     'strong',  true,  'manual', 'verify slug'),
+  ('Perplexity',      'ashby',      'perplexity',   'strong',  true,  'manual', 'slug verified'),
+  ('Scale AI',        'greenhouse', 'scaleai',      'strong',  true,  'manual', 'slug verified'),
+  ('Databricks',      'greenhouse', 'databricks',   'strong',  true,  'manual', 'slug verified'),
+  ('Hugging Face',    'greenhouse', 'huggingface',  'strong',  false, 'manual', 'not on greenhouse/ashby/lever/workday — only found on Workable in the ATS dataset, which this pipeline does not support yet. Left inactive.'),
+  ('Character.AI',    'ashby',      'character',    'strong',  true,  'manual', 'slug verified'),
+  ('Cursor',           'ashby',      'cursor',       'strong',  true,  'manual', 'corrected: slug is cursor, not anysphere'),
+  ('Glean',           'greenhouse', 'gleanwork',    'strong',  true,  'manual', 'corrected: slug is gleanwork, not glean'),
+  ('Harvey',           'ashby',      'harvey',       'strong',  true,  'manual', 'slug verified'),
+  ('ElevenLabs',      'ashby',      'elevenlabs',   'strong',  true,  'manual', 'corrected: was greenhouse, actually ashby'),
+  ('Runway',           'ashby',      'runway-ml',    'strong',  true,  'manual', 'corrected: slug is runway-ml — "runway" alone is a different company (Runway Financial)'),
   ('Replicate',       'ashby',      'replicate',    'strong',  true,  'manual', null),
-  ('Together AI',     'ashby',      'togetherai',   'strong',  true,  'manual', 'verify slug'),
-  ('Modal',           'ashby',      'modal',        'strong',  true,  'manual', null),
-  ('LangChain',       'ashby',      'langchain',    'strong',  true,  'manual', 'verify slug'),
-  ('Sierra',          'ashby',      'sierra',       'strong',  true,  'manual', 'AI agents — verify slug'),
+  ('Together AI',     'greenhouse', 'togetherai',   'strong',  true,  'manual', 'corrected: was ashby, actually greenhouse'),
+  ('Modal',            'ashby',      'modal',        'strong',  true,  'manual', null),
+  ('LangChain',        'ashby',      'langchain',    'strong',  true,  'manual', 'slug verified'),
+  ('Sierra',            'ashby',      'sierra',       'strong',  true,  'manual', 'AI agents — slug verified'),
 
   -- ─── Explore (broader tech + lifestyle/health) ───
-  ('Airtable',        'greenhouse', 'airtable',     'explore', true,  'manual', 'verify slug'),
-  ('Datadog',         'greenhouse', 'datadog',      'explore', true,  'manual', 'verify slug'),
-  ('Asana',           'greenhouse', 'asana',        'explore', true,  'manual', 'verify slug'),
-  ('Discord',         'greenhouse', 'discord',      'explore', true,  'manual', 'verify slug'),
-  ('Strava',          'greenhouse', 'strava',       'explore', true,  'manual', 'fits active/dive interest'),
-  ('Mercury',         'greenhouse', 'mercury',      'explore', true,  'manual', 'verify slug'),
-  ('Mercor',          'ashby',      'mercor',       'explore', true,  'manual', 'verify slug'),
-  ('Garmin',          'workday',    'wd5/garmin/External', 'explore', false, 'manual', 'Workday; Dive Apps PM target — verify site name')
+  ('Airtable',        'greenhouse', 'airtable',     'explore', true,  'manual', 'slug verified'),
+  ('Datadog',           'greenhouse', 'datadog',      'explore', true,  'manual', 'slug verified'),
+  ('Asana',             'greenhouse', 'asana',        'explore', true,  'manual', 'slug verified'),
+  ('Discord',           'greenhouse', 'discord',      'explore', true,  'manual', 'slug verified'),
+  ('Strava',           'ashby',      'strava',       'explore', true,  'manual', 'corrected: was greenhouse, actually ashby — fits active/dive interest'),
+  ('Mercury',           'greenhouse', 'mercury',      'explore', true,  'manual', 'slug verified'),
+  ('Mercor',             'ashby',      'mercor',       'explore', true,  'manual', 'slug verified'),
+  ('Garmin',           'workday',    'wd5/garmin/External', 'explore', false, 'manual', 'Workday; not in ATS dataset — Garmin actually runs on iCIMS (careers-garmin.icims.com), not Workday. This pipeline does not support iCIMS yet. Left inactive.')
 
 on conflict (ats_type, ats_slug) do update set
   name   = excluded.name,

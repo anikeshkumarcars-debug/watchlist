@@ -197,10 +197,66 @@ def fetch_lever(slug: str) -> list[dict]:
         return []
 
 
+def fetch_workday(slug: str) -> list[dict]:
+    """
+    slug format: 'wd{N}/{tenant}/{site}', e.g. 'wd5/nvidia/nvidiaexternalcareersite'
+    (see sql/seed.sql header for the format reminder).
+
+    Workday has no public REST API. This calls the same undocumented JSON
+    endpoint their own careers-page widget uses. Capped at 100 postings per
+    company (5 pages) — plenty to find PM roles without hammering a tenant
+    that has thousands of open reqs.
+    """
+    try:
+        wd_host, tenant, site = slug.split("/", 2)
+    except ValueError:
+        log.warning(f"Workday slug malformed (expected wdN/tenant/site): {slug}")
+        return []
+
+    base = f"https://{tenant}.{wd_host}.myworkdayjobs.com"
+    api_url = f"{base}/wday/cxs/{tenant}/{site}/jobs"
+
+    postings, offset, limit, max_pages = [], 0, 20, 5
+    try:
+        for _ in range(max_pages):
+            r = httpx.post(
+                api_url,
+                json={"appliedFacets": {}, "limit": limit, "offset": offset, "searchText": ""},
+                headers={"content-type": "application/json"},
+                timeout=20,
+            )
+            r.raise_for_status()
+            data = r.json()
+            batch = data.get("jobPostings", [])
+            if not batch:
+                break
+            for j in batch:
+                ext_path = j.get("externalPath", "")
+                job_id = ext_path.rsplit("_", 1)[-1] if ext_path else ext_path
+                postings.append({
+                    "ats_job_id": job_id or ext_path or j.get("title", ""),
+                    "title":      j.get("title", ""),
+                    "location":   j.get("locationsText", "") or "",
+                    "url":        f"{base}/{site}{ext_path}" if ext_path else base,
+                    # Workday only exposes relative strings ("Posted Today"), not
+                    # real timestamps, so posted_at stays unknown -> is_recent() keeps it.
+                    "posted_at":  None,
+                    "raw_jd":     "",
+                })
+            offset += limit
+            if offset >= data.get("total", 0):
+                break
+            time.sleep(0.15)
+    except Exception as e:
+        log.warning(f"Workday {slug}: {e}")
+    return postings
+
+
 ATS_FETCHERS = {
     "greenhouse": fetch_greenhouse,
     "ashby":      fetch_ashby,
     "lever":      fetch_lever,
+    "workday":    fetch_workday,
 }
 
 # ── Claude Scoring ─────────────────────────────────────────────────────────────
