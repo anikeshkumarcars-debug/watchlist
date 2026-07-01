@@ -42,22 +42,11 @@ HEADERS_SB = {
 CUTOFF_HOURS = 26  # slightly over 24h to avoid missing jobs near the boundary
 
 # ── Candidate profile ──────────────────────────────────────────────────────────
+# Lives in profile/candidate_profile.md so it can be edited without touching code.
 
-CANDIDATE_PROFILE = """
-Name: Shailvi Kumar
-Role target: Senior Product Manager / AI Product Manager
-Background:
-  - 6 years software engineering + product ownership (CS/engineering undergrad)
-  - UCLA Anderson MBA candidate, Class of 2026, Easton Technology Management Fellow
-  - AWS Senior TPM intern: Amazon Linux PathFinder (OS upgrade advisor product)
-  - GIVE: Product Owner, OKR roadmap, PRD authorship, HDFC Bank ML pipeline
-  - Builder: shipped Daybreak (GitHub Actions + Claude API autonomous digest),
-    Tailorbot (n8n agentic workflow, JD to resume diff + cover letter),
-    Dossier (LinkedIn to pre-meeting brief), Sightline + Tidepool (Lovable prototypes)
-Strong suits: AI/ML product, 0-to-1 builds, technical depth, cross-functional leadership
-Location preference: San Francisco Bay Area / Los Angeles / Remote
-Seniority: Mid to Senior IC (no VP/Director roles)
-"""
+_PROFILE_PATH = os.path.join(os.path.dirname(__file__), "..", "profile", "candidate_profile.md")
+with open(_PROFILE_PATH) as _f:
+    CANDIDATE_PROFILE = _f.read()
 
 # ── Filters ────────────────────────────────────────────────────────────────────
 
@@ -324,7 +313,9 @@ def main():
     seen_this_run: set[tuple] = set()
     cutoff = datetime.now(timezone.utc) - timedelta(hours=CUTOFF_HOURS)
 
-    total_fetched = total_kept = total_scored = 0
+    total_fetched = total_kept = total_scored = total_errors = 0
+    all_scores: list[int] = []
+    companies_with_matches: list[str] = []
 
     for co in companies:
         co_id, co_name, ats_type, ats_slug = (
@@ -333,29 +324,26 @@ def main():
 
         fetcher = ATS_FETCHERS.get(ats_type)
         if not fetcher:
-            log.warning(f"No fetcher for {ats_type} ({co_name}) — skipping")
+            log.warning(f"{co_name}: no fetcher for {ats_type} — skipping")
+            total_errors += 1
             continue
 
         # First-time companies get no date filter so we seed the DB properly
         is_first_run = co_id not in companies_with_jobs
         active_cutoff = None if is_first_run else cutoff
 
-        if is_first_run:
-            log.info(f"-> {co_name} ({ats_type}/{ats_slug}) [FIRST RUN — no date filter]")
-        else:
-            log.info(f"-> {co_name} ({ats_type}/{ats_slug})")
-
         postings = fetcher(ats_slug)
         total_fetched += len(postings)
 
-        # Apply PM + location + recency filter
         relevant = [
             p for p in postings
             if p.get("ats_job_id") and p.get("title")
             and should_keep(p["title"], p.get("location", ""), p.get("posted_at"), active_cutoff)
         ]
-        log.info(f"  {len(postings)} fetched -> {len(relevant)} kept after filter")
         total_kept += len(relevant)
+
+        tag = " [FIRST RUN]" if is_first_run else ""
+        log.info(f"{co_name}{tag}: {len(postings)} fetched -> {len(relevant)} kept")
 
         # Track all fetched job IDs for closed-detection regardless
         for p in postings:
@@ -409,27 +397,34 @@ def main():
         }
 
         to_score = [j for j in co_jobs if j["id"] not in matched_ids]
-        log.info(f"  {len(to_score)} unscored -> scoring")
 
         match_rows = []
+        co_match_count = 0
         for job in to_score:
             result = score_job(job["title"], job.get("location", ""), job.get("raw_jd", ""))
-            if result and isinstance(result.get("score"), int) and result["score"] >= SCORE_THRESHOLD:
-                match_rows.append({
-                    "job_id":       job["id"],
-                    "score":        result["score"],
-                    "role_fit":     result.get("role_fit"),
-                    "level_fit":    result.get("level_fit"),
-                    "location_fit": result.get("location_fit"),
-                    "reasoning":    result.get("reasoning", ""),
-                    "scored_at":    now,
-                })
-                total_scored += 1
-                log.info(f"    {result['score']}: {job['title']}")
+            if result and isinstance(result.get("score"), int):
+                all_scores.append(result["score"])
+                if result["score"] >= SCORE_THRESHOLD:
+                    match_rows.append({
+                        "job_id":       job["id"],
+                        "score":        result["score"],
+                        "role_fit":     result.get("role_fit"),
+                        "level_fit":    result.get("level_fit"),
+                        "location_fit": result.get("location_fit"),
+                        "reasoning":    result.get("reasoning", ""),
+                        "scored_at":    now,
+                    })
+                    total_scored += 1
+                    co_match_count += 1
+                    log.info(f"    {result['score']}: {job['title']}")
             time.sleep(0.5)
+
+        if to_score:
+            log.info(f"  scored {len(to_score)} -> {co_match_count} matched (>= {SCORE_THRESHOLD})")
 
         if match_rows:
             sb_upsert("matches", match_rows, "job_id")
+            companies_with_matches.append(co_name)
 
         time.sleep(1)
 
@@ -440,10 +435,13 @@ def main():
             sb_patch("jobs", {"id": job_id}, {"status": "closed"})
             closed_count += 1
 
+    score_summary = f"avg_score={sum(all_scores)/len(all_scores):.0f}" if all_scores else "no jobs scored"
     log.info(
-        f"=== Done. fetched={total_fetched} kept={total_kept} "
-        f"scored={total_scored} closed={closed_count} ==="
+        f"=== Done. companies={len(companies)} fetched={total_fetched} kept={total_kept} "
+        f"scored={total_scored} closed={closed_count} errors={total_errors} ({score_summary}) ==="
     )
+    if companies_with_matches:
+        log.info(f"New matches from: {', '.join(companies_with_matches)}")
 
 
 # ── Utilities ──────────────────────────────────────────────────────────────────
