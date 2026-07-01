@@ -1,0 +1,89 @@
+name: Watchlist — discover new companies
+
+# Runs weekly on its own. Writes discovered companies straight to Supabase
+# (tagged source='discovered', tier=explore by default) — no manual paste
+# step. new_companies.sql is still generated each run as an audit log,
+# visible in the run summary, in case anything needs cleaning up after.
+on:
+  schedule:
+    - cron: "0 15 * * 1"   # Monday, 7 AM PT
+  workflow_dispatch:
+    inputs:
+      ats:
+        description: "ATS types to scan (space-separated)"
+        required: false
+        default: "greenhouse ashby lever workday"
+      limit:
+        description: "Max candidates to check per ATS (0 = full local list, ~2-5k per type)"
+        required: false
+        default: "0"
+      concurrency:
+        description: "Parallel requests per ATS type"
+        required: false
+        default: "20"
+      tier:
+        description: "Tier to tag newly-discovered companies with"
+        required: false
+        default: "explore"
+        type: choice
+        options:
+          - explore
+          - strong
+          - dream
+      dry_run:
+        description: "Write new_companies.sql only, skip inserting into Supabase"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  discover:
+    name: Scan ATS boards for open PM roles
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install httpx
+
+      - name: Run discovery
+        env:
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          python scripts/expand_companies.py \
+            --ats ${{ inputs.ats || 'greenhouse ashby lever workday' }} \
+            --limit ${{ inputs.limit || '0' }} \
+            --concurrency ${{ inputs.concurrency || '20' }} \
+            --tier ${{ inputs.tier || 'explore' }} \
+            ${{ (inputs.dry_run == true && '--dry-run') || '' }}
+
+      - name: Show results in the run summary
+        if: always()
+        run: |
+          if [ -f new_companies.sql ]; then
+            echo "## new_companies.sql (audit log)" >> "$GITHUB_STEP_SUMMARY"
+            echo '```sql' >> "$GITHUB_STEP_SUMMARY"
+            cat new_companies.sql >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No new companies matched this run." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload new_companies.sql
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: new_companies-sql
+          path: new_companies.sql
+          if-no-files-found: warn
+          retention-days: 30
