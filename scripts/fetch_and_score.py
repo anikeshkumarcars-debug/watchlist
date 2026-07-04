@@ -53,30 +53,46 @@ with open(_PROFILE_PATH) as _f:
 PM_KEYWORDS = [
     "product manager",
     "product management",
+    "senior product manager",
     "senior pm",
-    "pm ii",
-    "pm i",
-    "pm 2",
-    "pm 1",
+    "technical product manager",
+    "ai product manager",
     "product lead",
-    "product builder",
+    "pm ii",
+    "pm 2",
+    "pm iii",
+    "pm 3",
+    "product owner",         # some startups use this for PM roles
+    "product strategist",
 ]
 
 EXCLUDE_KEYWORDS = [
+    # seniority
     "director", "vp ", "vice president", "head of product", "chief product",
-    "intern", "apprentice", "principal pm", "group product manager", "marketing", "designer",
-    "engineer", "scientist", "analyst", "counsel", "recruiter", "operations",
-    "account executive", "account manager", "sales", "support", "coordinator",
+    "principal pm", "group product manager", "distinguished",
+    # too junior
+    "intern", "apprentice", "associate product manager", "apm ",
+    # wrong function
+    "marketing", "designer", "engineer", "scientist", "analyst",
+    "counsel", "recruiter", "coordinator", "copywriter",
+    "account executive", "account manager", "sales",
+    "support", "customer success",
+    # program/project (not product)
+    "program manager", "project manager", "scrum master",
+    "operations manager", "supply chain",
 ]
 
 TARGET_LOCATIONS = [
+    # tier 1 — strong preference
     "san francisco", "bay area", "san jose", "mountain view", "palo alto",
-    "menlo park", "sunnyvale", "redwood city", "seattle", "austin", "boston",
-    "new york", "nyc", "los angeles", "irvine", "culver city", "chicago",
-    "remote", "hybrid", "united states", "usa", ", ca", ", wa", ", ny",
-    ", tx", ", ma", ", il", ", or", "long beach", "san diego", "sd",
+    "menlo park", "sunnyvale", "redwood city", "south san francisco",
+    "los angeles", "culver city", "santa monica", "venice", "san diego",
+    "remote", "hybrid",
+    # tier 2 — open to
+    "seattle", "new york", "nyc", "boston", "austin", "chicago",
+    # catch-alls
+    "united states", "usa", ", ca", ", wa", ", ny", ", tx", ", ma",
 ]
-
 
 def is_pm_role(title: str) -> bool:
     t = title.lower()
