@@ -64,8 +64,7 @@ PM_KEYWORDS = [
 
 EXCLUDE_KEYWORDS = [
     "director", "vp ", "vice president", "head of product", "chief product",
-    "intern", "apprentice", "principal pm", "group product manager",
-    "technical program manager", "program manager", "marketing", "designer",
+    "intern", "apprentice", "principal pm", "group product manager", "marketing", "designer",
     "engineer", "scientist", "analyst", "counsel", "recruiter", "operations",
     "account executive", "account manager", "sales", "support", "coordinator",
 ]
@@ -75,7 +74,7 @@ TARGET_LOCATIONS = [
     "menlo park", "sunnyvale", "redwood city", "seattle", "austin", "boston",
     "new york", "nyc", "los angeles", "irvine", "culver city", "chicago",
     "remote", "hybrid", "united states", "usa", ", ca", ", wa", ", ny",
-    ", tx", ", ma", ", il", ", or",
+    ", tx", ", ma", ", il", ", or", "long beach", "san diego", "sd",
 ]
 
 
