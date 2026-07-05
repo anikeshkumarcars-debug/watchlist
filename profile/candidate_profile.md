@@ -1,23 +1,24 @@
 - Name: Shailvi Kumar
-- Role target: Senior Product Manager | AI/ML Product Manager | Technical Product Manager
+- Role target: Product Manager | Technical Product Manager | AI Product Manager | Product Manager, Platform
+- Seniority: Mid-level IC (2–5 YOE range in JDs, or "equivalent experience" language)
 - Background:
-  - 6 years software engineering + product management (B.Tech CS, NIT Rourkela)
+  - 2+ years product ownership: roadmaps, PRDs, sprint planning, GTM, team of 7 engineers (GIVE)
+  - 4 years software engineering with increasing product responsibility (Goodera)
+  - AWS EC2 Sr. PMT intern: 0-to-1 product strategy for AI-powered developer tool (PathFinder)
   - UCLA Anderson MBA, Class of 2026, Easton Technology Management Fellow
-  - AWS Senior PMT intern: Amazon Linux PathFinder — AI-assisted OS upgrade advisor (EC2)
-  - GIVE: Product Owner / SDE III — OKR roadmaps, PRDs, HDFC Bank ML pipeline, payment integrations
-  - Goodera: Lead Product Engineer — marketplace platform, enterprise SaaS, volunteering workflows
-- Skills: Python, SQL, REST APIs, Claude API, Anthropic SDK, GitHub Actions, n8n, Supabase, Lovable, Framer, AWS (EC2, Lambda), Jira, Figma, Amplitude
-- Methods: PRDs, roadmapping, OKRs, A/B testing, experimentation, agile/scrum, sprint planning, user research, competitive analysis, go-to-market, stakeholder management, data-driven prioritization
+  - B.Tech CS, NIT Rourkela
+- Skills: Python, JavaScript, SQL, HTML/CSS, Claude API, Anthropic SDK, GitHub Actions, n8n, Supabase, Lovable, Framer, AWS (EC2, Lambda, S3, RDS), Jira, Figma, Amplitude
+- Methods: PRDs, PRFAQs, roadmapping, OKRs, A/B testing, rapid prototyping, agile/scrum, user research, competitive analysis, go-to-market, stakeholder management, data-driven prioritization
 - Highlights:
   - Built autonomous LLM pipelines (Claude API + GitHub Actions + Supabase)
   - Built agentic workflows with tool-calling and prompt orchestration (n8n)
   - Shipped 0-to-1 prototypes end-to-end as sole PM/builder
-  - Defined and launched ML-powered features in enterprise products
+  - Wrote production code for 5 years before moving to product
   - Led cross-functional teams (engineering, design, data science, business)
-- Strong suits: AI/ML product, 0-to-1 builds, technical depth, cross-functional leadership
-- Location preference: San Francisco Bay Area / Los Angeles / Remote
-- Seniority: Mid to Senior IC (no VP/Director roles, 3–8 YOE range in JDs)
+- Strong suits: AI/ML product, 0-to-1 builds, technical depth, rapid prototyping, cross-functional leadership
+- Location preference: San Francisco Bay Area / Los Angeles / Remote. Open to Seattle, NYC, Boston, Austin, Chicago, Denver.
 - Domain fit:
-  - Strongly prefer: AI/ML products, LLM applications, developer tools, infrastructure/automation/internal platforms, AI-native startups, applied-AI teams
-  - Open to: enterprise SaaS, marketplace/platform products, consumer product (if AI-native), mid-stage startups, big tech AI orgs
-  - Deprioritize: ad-tech, pure consumer social, hardware, non-tech industries
+- Strongly prefer: AI/ML products, LLM applications, developer tools, workflow automation, data platforms, internal tools/platforms, AI-native startups, applied-AI teams
+- Open to: B2B SaaS (with AI component), cloud infrastructure, productivity tools, growth-stage startups building AI features
+- Hard skip: gaming, defense/clearance, semiconductor, medtech/biotech, manufacturing, luxury retail, law firms, ad-tech, pure consumer social, hardware-only, automotive/AV, SAFe-required roles
+- Comp floor: $120K base (skip below unless exceptional equity)
