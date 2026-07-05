@@ -49,51 +49,175 @@ with open(_PROFILE_PATH) as _f:
     CANDIDATE_PROFILE = _f.read()
 
 # ── Filters ────────────────────────────────────────────────────────────────────
-
 PM_KEYWORDS = [
+    # core PM titles
     "product manager",
     "product management",
-    "senior product manager",
-    "senior pm",
     "technical product manager",
+    "product manager technical",
+ 
+    # AI/ML PM titles
     "ai product manager",
-    "product lead",
+    "ml product manager",
+    "product manager ai",
+    "product manager ml",
+    "product manager generative ai",
+    "product manager llm",
+ 
+    # platform / infra / tools variants
+    "product manager platform",
+    "platform product manager",
+    "product manager developer",
+    "product manager infrastructure",
+    "product manager data",
+    "product manager automation",
+ 
+    # level-specific
     "pm ii",
     "pm 2",
     "pm iii",
     "pm 3",
-    "product owner",         # some startups use this for PM roles
+    "product manager ii",
+    "product manager iii",
+ 
+    # senior — keep but not the primary filter
+    "senior product manager",
+    "senior pm",
+    "senior technical product manager",
+    "sr product manager",
+    "sr. product manager",
+ 
+    # alt titles
+    "product lead",
+    "product owner",
     "product strategist",
 ]
-
+ 
 EXCLUDE_KEYWORDS = [
-    # seniority
-    "director", "vp ", "vice president", "head of product", "chief product",
-    "principal pm", "group product manager", "distinguished",
-    # too junior
-    "intern", "apprentice", "associate product manager", "apm ",
-    # wrong function
-    "marketing", "designer", "engineer", "scientist", "analyst",
-    "counsel", "recruiter", "coordinator", "copywriter",
-    "account executive", "account manager", "sales",
-    "support", "customer success",
-    # program/project (not product)
-    "program manager", "project manager", "scrum master",
+    # --- too senior ---
+    "director", "sr director", "senior director",
+    "vp ", "vp,", "vice president",
+    "head of product", "head of pm",
+    "chief product", "cpo",
+    "principal pm", "principal product",
+    "group product manager", "gpm",
+    "distinguished",
+    "staff product manager",
+ 
+    # --- too junior ---
+    "intern", "internship",
+    "apprentice",
+    "associate product manager", "apm ",
+    "new grad", "entry level", "entry-level",
+ 
+    # --- wrong function ---
+    "marketing manager", "product marketing",
+    "designer", "design manager",
+    "software engineer", "data engineer", "ml engineer",
+    "data scientist", "research scientist",
+    "data analyst", "business analyst", "financial analyst",
+    "legal counsel", "attorney",
+    "recruiter", "talent acquisition",
+    "coordinator", "copywriter", "content writer",
+    "account executive", "account manager",
+    "sales manager", "sales representative", "sales engineer",
+    "customer support", "customer success",
+    "solutions architect", "solutions engineer",
+    "technical writer",
+ 
+    # --- program/project (not product) ---
+    "program manager", "technical program manager", "tpm",
+    "project manager", "project coordinator",
+    "scrum master",
+    "delivery manager",
     "operations manager", "supply chain",
+    "release manager",
+ 
+    # --- hard-skip domains ---
+    "gaming", "game designer", "game producer",
+    "defense", "clearance required", "security clearance",
+    "top secret", "ts/sci",
+    "semiconductor", "chip design", "vlsi",
+    "medical device", "clinical", "pharmaceutical", "pharma",
+    "biotech", "life sciences",
+    "manufacturing engineer", "industrial engineer",
+    "autonomous vehicle", "self-driving",
+    "ad tech", "programmatic", "advertising operations",
+    "luxury", "fashion",
+ 
+    # --- methodology gates ---
+    "safe certified", "safe certification", "scaled agile",
+ 
+    # --- experience gates ---
+    "10+ years", "10 years", "12+ years", "15+ years",
+    "8+ years of product",
 ]
-
+ 
 TARGET_LOCATIONS = [
-    # tier 1 — strong preference
-    "san francisco", "bay area", "san jose", "mountain view", "palo alto",
-    "menlo park", "sunnyvale", "redwood city", "south san francisco",
-    "los angeles", "culver city", "santa monica", "venice", "san diego",
-    "remote", "hybrid",
-    # tier 2 — open to
-    "seattle", "new york", "nyc", "boston", "austin", "chicago",
-    # catch-alls
-    "united states", "usa", ", ca", ", wa", ", ny", ", tx", ", ma",
+    # ---- Tier 1: Strong preference ----
+    # SF Bay Area
+    "san francisco", "bay area", "sf",
+    "san jose", "mountain view", "palo alto",
+    "menlo park", "sunnyvale", "redwood city",
+    "south san francisco", "cupertino", "santa clara",
+    "oakland", "berkeley", "fremont", "san mateo",
+    "foster city", "burlingame", "milpitas",
+    "pleasanton", "walnut creek", "emeryville",
+ 
+    # LA metro
+    "los angeles", "culver city", "santa monica",
+    "venice", "playa vista", "el segundo",
+    "burbank", "glendale", "pasadena", "west hollywood",
+    "marina del rey", "beverly hills", "century city",
+    "long beach", "torrance", "irvine",
+    "costa mesa", "newport beach",
+ 
+    # San Diego
+    "san diego", "la jolla",
+ 
+    # Remote
+    "remote", "hybrid", "work from home",
+    "remote - us", "fully remote", "us remote",
+ 
+    # ---- Tier 2: Open to ----
+    # Seattle
+    "seattle", "bellevue", "redmond", "kirkland",
+ 
+    # New York
+    "new york", "nyc", "manhattan", "brooklyn",
+    "jersey city", "hoboken",
+ 
+    # Boston
+    "boston", "cambridge", "somerville",
+ 
+    # Austin
+    "austin",
+ 
+    # Chicago
+    "chicago",
+ 
+    # Denver
+    "denver", "boulder",
+ 
+    # Portland
+    "portland",
+ 
+    # DC metro
+    "washington dc", "arlington", "bethesda", "reston",
+ 
+    # ---- Tier 3: Would consider ----
+    "atlanta", "miami", "dallas", "houston",
+    "phoenix", "salt lake city",
+    "raleigh", "durham", "charlotte",
+    "nashville", "minneapolis", "philadelphia",
+ 
+    # ---- Catch-alls ----
+    "united states", "usa",
+    ", ca", ", wa", ", ny", ", tx", ", ma",
+    ", co", ", or", ", il", ", ga", ", va",
+    ", md", ", pa", ", nc", ", mn", ", ut",
+    ", az", ", fl", ", tn",
 ]
-
 def is_pm_role(title: str) -> bool:
     t = title.lower()
     if not any(k in t for k in PM_KEYWORDS):
