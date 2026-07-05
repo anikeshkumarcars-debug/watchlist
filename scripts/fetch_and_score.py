@@ -583,7 +583,8 @@ def main():
 
         # First-time companies get no date filter so we seed the DB properly
         is_first_run = co_id not in companies_with_jobs
-        active_cutoff = None if is_first_run else cutoff
+        first_run_cutoff = datetime(2026, 6, 1, tzinfo=timezone.utc)
+        active_cutoff = first_run_cutoff if is_first_run else cutoff
 
         postings = fetcher(ats_slug)
         total_fetched += len(postings)
