@@ -408,12 +408,70 @@ Exactly these fields:
   location_fit ("strong" | "moderate" | "weak")
   reasoning    (string, max 100 chars, plain English)
 
-Score rubric:
-  90-100: excellent fit across role, level, location
-  80-89:  strong fit, minor gaps
-  70-79:  good but notable gaps
-  65-69:  borderline, worth tracking
-  <65:    poor fit
+── DIMENSION RUBRICS ──
+
+ROLE FIT (what the product/domain is):
+  strong:   Product is in a high-growth or candidate-preferred domain: AI/ML,
+            LLM applications, developer tools, cloud infrastructure, data platforms,
+            workflow automation, internal tools/platforms, AI-native startups,
+            applied-AI teams, productivity software at strong tech companies.
+            Title is PM, Technical PM, AI PM, or Platform PM.
+  moderate: Product is in a viable but non-preferred domain: general B2B SaaS,
+            e-commerce, fintech, edtech, healthtech (non-clinical), consumer apps,
+            marketplaces, or growth-stage startups without a clear AI angle.
+            Still a legitimate PM role the candidate could do well in.
+  weak:     Role requires deep domain-specific expertise the candidate does not
+            have: healthcare/clinical regulation, semiconductor/chip design,
+            supply chain/logistics domain knowledge, legal/compliance specialization,
+            actuarial/insurance, real estate, automotive engineering, biotech R&D.
+            Or the title is actually EM, designer, analyst, program/project manager,
+            or marketing.
+
+LEVEL FIT (seniority match):
+  strong:   JD asks for 2-5 years PM/product experience, or uses "mid-level" /
+            "IC" language without specifying years. Title has no level modifier
+            or says "PM II" / "PM III". Scope is individual-contributor.
+  moderate: JD asks for 5-7 years, or title says "Senior" but described scope
+            is individual-contributor (no direct reports required). Also moderate
+            if YOE is unspecified but responsibilities suggest mid-to-senior scope.
+  weak:     JD requires 8+ years product experience, or role requires people
+            management, or title is Staff/Principal/Director/VP/Head of.
+
+LOCATION FIT:
+  strong:   Major US tech hubs, especially California: San Francisco, Bay Area,
+            Mountain View, Palo Alto, San Jose, Los Angeles, Santa Monica,
+            San Diego, Seattle, New York, Boston, Austin, Denver, Chicago.
+            Also strong: Remote or Hybrid with US eligibility.
+  moderate: Other US cities (Phoenix, Atlanta, Miami, Dallas, Raleigh, Nashville,
+            Salt Lake City, Portland, Philadelphia, etc.) or top international
+            locations (Amsterdam, Netherlands, London, EU with remote flexibility).
+  weak:     India, Southeast Asia, Latin America, Middle East, Africa, or any
+            location requiring in-country work authorization the candidate does
+            not have. Non-remote international roles outside US/EU.
+
+── SCORING FORMULA ──
+
+Start at 75. Adjust based on dimension ratings:
+
+  role_fit:     strong +15  |  moderate +5   |  weak -20
+  level_fit:    strong +10  |  moderate +5   |  weak -15
+  location_fit: strong +5   |  moderate 0    |  weak -10
+
+Cap at 100, floor at 0.
+
+This means:
+  strong/strong/strong = 100 (cap)
+  strong/strong/moderate = 100 (cap)
+  strong/moderate/strong = 100 (cap)
+  moderate/strong/strong = 95
+  strong/moderate/moderate = 85
+  moderate/moderate/strong = 85
+  moderate/moderate/moderate = 85
+  strong/weak/strong = 75
+  weak on any dimension with no strong to compensate < 65
+
+If the JD is empty, score from title + location only. Note in reasoning
+that the JD was unavailable and discount role_fit by one tier.
 """
 
 
@@ -525,7 +583,8 @@ def main():
 
         # First-time companies get no date filter so we seed the DB properly
         is_first_run = co_id not in companies_with_jobs
-        active_cutoff = None if is_first_run else cutoff
+        first_run_cutoff = datetime(2026, 6, 1, tzinfo=timezone.utc)
+        active_cutoff = first_run_cutoff if is_first_run else cutoff
 
         postings = fetcher(ats_slug)
         total_fetched += len(postings)
