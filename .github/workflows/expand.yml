@@ -6,7 +6,7 @@ name: Watchlist — discover new companies
 # visible in the run summary, in case anything needs cleaning up after.
 on:
   schedule:
-    - cron: "0 15 * * 1"   # Monday, 7 AM PT
+    - cron: "0 6 * * *"   # Monday, 7 AM PT
   workflow_dispatch:
     inputs:
       ats:
