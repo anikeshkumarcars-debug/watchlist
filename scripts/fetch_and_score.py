@@ -2,8 +2,12 @@
 """
 fetch_and_score.py
 ------------------
-Pulls open jobs from each ATS, filters by PM title + US location + recency,
-scores only relevant ones via Claude Haiku, upserts into Supabase.
+Pulls open jobs from each ATS, filters by PM/FDE title + US location + recency,
+fetches the full JD, scores the relevant ones against the candidate profile via
+Claude (Sonnet), and upserts matches into Supabase.
+
+Title classification (PM + FDE families) and the US-wide location filter live in
+filters.py, shared with expand_companies.py.
 
 Env vars (GitHub Actions secrets):
   SUPABASE_URL          https://xxxx.supabase.co
@@ -18,6 +22,10 @@ import os, json, time, logging, re
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 import httpx
+
+# Role classification + US-location filters live in filters.py so they stay
+# identical between this daily pipeline and expand_companies.py (discovery).
+from filters import classify_role, is_us_location
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,7 +47,13 @@ HEADERS_SB = {
     "Content-Type": "application/json",
 }
 
-CUTOFF_HOURS = 26  # slightly over 24h to avoid missing jobs near the boundary
+# Recency windows:
+#   - A company already in the DB fetches only its recent postings (~last 24h).
+#   - A brand-new company (no jobs yet) seeds a 30-day back-catalog on first run.
+# NOTE: postings with no date (all Workday, some others) can't be dated, so they
+# are always kept regardless of either window.
+CUTOFF_HOURS   = 26  # slightly over 24h to avoid missing jobs near the boundary
+FIRST_RUN_DAYS = 30  # back-catalog window the first time a company is seen
 
 # ── Candidate profile ──────────────────────────────────────────────────────────
 # Lives in profile/candidate_profile.md so it can be edited without touching code.
@@ -49,188 +63,9 @@ with open(_PROFILE_PATH) as _f:
     CANDIDATE_PROFILE = _f.read()
 
 # ── Filters ────────────────────────────────────────────────────────────────────
-PM_KEYWORDS = [
-    # core PM titles
-    "product manager",
-    "product management",
-    "technical product manager",
-    "product manager technical",
- 
-    # AI/ML PM titles
-    "ai product manager",
-    "ml product manager",
-    "product manager ai",
-    "product manager ml",
-    "product manager generative ai",
-    "product manager llm",
- 
-    # platform / infra / tools variants
-    "product manager platform",
-    "platform product manager",
-    "product manager developer",
-    "product manager infrastructure",
-    "product manager data",
-    "product manager automation",
- 
-    # level-specific
-    "pm ii",
-    "pm 2",
-    "pm iii",
-    "pm 3",
-    "product manager ii",
-    "product manager iii",
- 
-    # senior — keep but not the primary filter
-    "senior product manager",
-    "senior pm",
-    "senior technical product manager",
-    "sr product manager",
-    "sr. product manager",
- 
-    # alt titles
-    "product lead",
-    "product owner",
-    "product strategist",
-]
- 
-EXCLUDE_KEYWORDS = [
-    # --- too senior ---
-    "director", "sr director", "senior director",
-    "vp ", "vp,", "vice president",
-    "head of product", "head of pm",
-    "chief product", "cpo",
-    "principal pm", "principal product",
-    "group product manager", "gpm",
-    "distinguished",
-    "staff product manager",
- 
-    # --- too junior ---
-    "intern", "internship",
-    "apprentice",
-    "associate product manager", "apm ",
-    "new grad", "entry level", "entry-level",
- 
-    # --- wrong function ---
-    "marketing manager", "product marketing",
-    "designer", "design manager",
-    "software engineer", "data engineer", "ml engineer",
-    "data scientist", "research scientist",
-    "data analyst", "business analyst", "financial analyst",
-    "legal counsel", "attorney",
-    "recruiter", "talent acquisition",
-    "coordinator", "copywriter", "content writer",
-    "account executive", "account manager",
-    "sales manager", "sales representative", "sales engineer",
-    "customer support", "customer success",
-    "solutions architect", "solutions engineer",
-    "technical writer",
- 
-    # --- program/project (not product) ---
-    "program manager", "technical program manager", "tpm",
-    "project manager", "project coordinator",
-    "scrum master",
-    "delivery manager",
-    "operations manager", "supply chain",
-    "release manager",
- 
-    # --- hard-skip domains ---
-    "gaming", "game designer", "game producer",
-    "defense", "clearance required", "security clearance",
-    "top secret", "ts/sci",
-    "semiconductor", "chip design", "vlsi",
-    "medical device", "clinical", "pharmaceutical", "pharma",
-    "biotech", "life sciences",
-    "manufacturing engineer", "industrial engineer",
-    "autonomous vehicle", "self-driving",
-    "ad tech", "programmatic", "advertising operations",
-    "luxury", "fashion",
- 
-    # --- methodology gates ---
-    "safe certified", "safe certification", "scaled agile",
- 
-    # --- experience gates ---
-    "10+ years", "10 years", "12+ years", "15+ years",
-    "8+ years of product",
-]
- 
-TARGET_LOCATIONS = [
-    # ---- Tier 1: Strong preference ----
-    # SF Bay Area
-    "san francisco", "bay area", "sf",
-    "san jose", "mountain view", "palo alto",
-    "menlo park", "sunnyvale", "redwood city",
-    "south san francisco", "cupertino", "santa clara",
-    "oakland", "berkeley", "fremont", "san mateo",
-    "foster city", "burlingame", "milpitas",
-    "pleasanton", "walnut creek", "emeryville",
- 
-    # LA metro
-    "los angeles", "culver city", "santa monica",
-    "venice", "playa vista", "el segundo",
-    "burbank", "glendale", "pasadena", "west hollywood",
-    "marina del rey", "beverly hills", "century city",
-    "long beach", "torrance", "irvine",
-    "costa mesa", "newport beach",
- 
-    # San Diego
-    "san diego", "la jolla",
- 
-    # Remote
-    "remote", "hybrid", "work from home",
-    "remote - us", "fully remote", "us remote",
- 
-    # ---- Tier 2: Open to ----
-    # Seattle
-    "seattle", "bellevue", "redmond", "kirkland",
- 
-    # New York
-    "new york", "nyc", "manhattan", "brooklyn",
-    "jersey city", "hoboken",
- 
-    # Boston
-    "boston", "cambridge", "somerville",
- 
-    # Austin
-    "austin",
- 
-    # Chicago
-    "chicago",
- 
-    # Denver
-    "denver", "boulder",
- 
-    # Portland
-    "portland",
- 
-    # DC metro
-    "washington dc", "arlington", "bethesda", "reston",
- 
-    # ---- Tier 3: Would consider ----
-    "atlanta", "miami", "dallas", "houston",
-    "phoenix", "salt lake city",
-    "raleigh", "durham", "charlotte",
-    "nashville", "minneapolis", "philadelphia",
- 
-    # ---- Catch-alls ----
-    "united states", "usa",
-    ", ca", ", wa", ", ny", ", tx", ", ma",
-    ", co", ", or", ", il", ", ga", ", va",
-    ", md", ", pa", ", nc", ", mn", ", ut",
-    ", az", ", fl", ", tn",
-]
-def is_pm_role(title: str) -> bool:
-    t = title.lower()
-    if not any(k in t for k in PM_KEYWORDS):
-        return False
-    if any(k in t for k in EXCLUDE_KEYWORDS):
-        return False
-    return True
-
-
-def is_target_location(location: str) -> bool:
-    if not location or location.strip() == "":
-        return True
-    return any(k in location.lower() for k in TARGET_LOCATIONS)
+# The PM/FDE title classifier (classify_role) and the US-wide location check
+# (is_us_location) are imported from filters.py — the single source of truth
+# shared with expand_companies.py.
 
 
 def is_recent(posted_at: Optional[str], cutoff: datetime) -> bool:
@@ -247,9 +82,9 @@ def is_recent(posted_at: Optional[str], cutoff: datetime) -> bool:
 
 
 def should_keep(title: str, location: str, posted_at: Optional[str], cutoff: Optional[datetime]) -> bool:
-    if not is_pm_role(title):
+    if classify_role(title) is None:
         return False
-    if not is_target_location(location):
+    if not is_us_location(location):
         return False
     if cutoff and not is_recent(posted_at, cutoff):
         return False
@@ -327,7 +162,9 @@ def fetch_lever(slug: str) -> list[dict]:
                 "posted_at":  datetime.fromtimestamp(
                                   j["createdAt"] / 1000, tz=timezone.utc
                               ).isoformat() if j.get("createdAt") else None,
-                "raw_jd":     "",
+                # Lever's list endpoint already includes the full JD, so no
+                # per-posting call is needed (unlike Greenhouse/Workday).
+                "raw_jd":     _strip_html(j.get("descriptionPlain") or j.get("description") or ""),
             }
             for j in r.json()
         ]
@@ -381,6 +218,8 @@ def fetch_workday(slug: str) -> list[dict]:
                     # real timestamps, so posted_at stays unknown -> is_recent() keeps it.
                     "posted_at":  None,
                     "raw_jd":     "",
+                    # Kept for JD hydration in main(); ignored by the upsert.
+                    "_ext_path":  ext_path,
                 })
             offset += limit
             if offset >= data.get("total", 0):
@@ -389,6 +228,26 @@ def fetch_workday(slug: str) -> list[dict]:
     except Exception as e:
         log.warning(f"Workday {slug}: {e}")
     return postings
+
+
+def fetch_workday_jd(slug: str, ext_path: str) -> str:
+    """Fetch a single Workday posting's full JD from the same cxs endpoint the
+    careers widget uses. `slug` is 'wd{N}/{tenant}/{site}', `ext_path` is the
+    posting's externalPath (starts with '/')."""
+    if not ext_path:
+        return ""
+    try:
+        wd_host, tenant, site = slug.split("/", 2)
+    except ValueError:
+        return ""
+    url = f"https://{tenant}.{wd_host}.myworkdayjobs.com/wday/cxs/{tenant}/{site}{ext_path}"
+    try:
+        r = httpx.get(url, headers={"content-type": "application/json"}, timeout=15)
+        r.raise_for_status()
+        info = r.json().get("jobPostingInfo", {}) or {}
+        return _strip_html(info.get("jobDescription", ""))
+    except Exception:
+        return ""
 
 
 ATS_FETCHERS = {
@@ -400,86 +259,63 @@ ATS_FETCHERS = {
 
 # ── Claude Scoring ─────────────────────────────────────────────────────────────
 
-SCORE_SYSTEM = """You are a job-fit evaluator. Output ONLY valid JSON, no markdown, no explanation.
-Exactly these fields:
-  score        (integer 0-100)
-  role_fit     ("strong" | "moderate" | "weak")
-  level_fit    ("strong" | "moderate" | "weak")
-  location_fit ("strong" | "moderate" | "weak")
-  reasoning    (string, max 100 chars, plain English)
+SCORE_MODEL = "claude-sonnet-5"
 
-── DIMENSION RUBRICS ──
+SCORE_SYSTEM = """You are a job-fit evaluator for one specific candidate. Judge how well THIS candidate fits THIS role. Company prestige is irrelevant: a famous AI lab role that rigidly demands 8 years of product management is a BAD fit and must score low.
 
-ROLE FIT (what the product/domain is):
-  strong:   Product is in a high-growth or candidate-preferred domain: AI/ML,
-            LLM applications, developer tools, cloud infrastructure, data platforms,
-            workflow automation, internal tools/platforms, AI-native startups,
-            applied-AI teams, productivity software at strong tech companies.
-            Title is PM, Technical PM, AI PM, or Platform PM.
-  moderate: Product is in a viable but non-preferred domain: general B2B SaaS,
-            e-commerce, fintech, edtech, healthtech (non-clinical), consumer apps,
-            marketplaces, or growth-stage startups without a clear AI angle.
-            Still a legitimate PM role the candidate could do well in.
-  weak:     Role requires deep domain-specific expertise the candidate does not
-            have: healthcare/clinical regulation, semiconductor/chip design,
-            supply chain/logistics domain knowledge, legal/compliance specialization,
-            actuarial/insurance, real estate, automotive engineering, biotech R&D.
-            Or the title is actually EM, designer, analyst, program/project manager,
-            or marketing.
+Output ONLY valid JSON (no markdown, no prose). Exactly these fields:
+  score            integer 0-100
+  role_family      "pm" | "fde" | "other"      (which lens you judged with)
+  role_fit         "strong" | "moderate" | "weak"
+  level_fit        "strong" | "moderate" | "weak"
+  location_fit     "strong" | "moderate" | "weak"
+  years_required   integer or null   (max years of experience the JD demands; null if unstated)
+  meets_experience true | false      (does the candidate qualify under the candidate's years-of-experience rule?)
+  blocker          true | false      (does it require US citizenship, a security clearance, a green card, or state no sponsorship ever?)
+  reasoning        string, max 120 chars, plain English
 
-LEVEL FIT (seniority match):
-  strong:   JD asks for 2-5 years PM/product experience, or uses "mid-level" /
-            "IC" language without specifying years. Title has no level modifier
-            or says "PM II" / "PM III". Scope is individual-contributor.
-  moderate: JD asks for 5-7 years, or title says "Senior" but described scope
-            is individual-contributor (no direct reports required). Also moderate
-            if YOE is unspecified but responsibilities suggest mid-to-senior scope.
-  weak:     JD requires 8+ years product experience, or role requires people
-            management, or title is Staff/Principal/Director/VP/Head of.
+Which lens to use (role_family):
+  - "pm"  = Product Manager / Product Lead roles. Judge product-ownership fit.
+  - "fde" = Forward Deployed / Applied AI / Solutions / Deployment / Implementation Engineer roles. Judge "engineer who ships next to the customer" fit (coding + customer delivery), NOT PM ownership.
+  - "other" = neither. Set role_fit weak.
+A title-screen guess is provided, but decide for yourself from the JD.
+
+DIMENSION RUBRICS:
+
+ROLE FIT (does the role type match a target family + the candidate's strengths?):
+  strong:   A PM or FDE role squarely in the candidate's wheelhouse — AI/ML, LLM apps, developer tools, cloud/data platforms, workflow automation, applied-AI, or technical/platform PM.
+  moderate: A legitimate PM/FDE role in a viable but less-preferred area (general B2B SaaS, fintech, edtech, consumer, marketplaces) the candidate could still do well in.
+  weak:     Not really a target role — the title is actually EM, designer, analyst, program/project manager, or marketing (role_family "other") — or it demands deep domain expertise the candidate lacks.
+
+LEVEL FIT (apply the candidate's years-of-experience rule literally):
+  strong:   JD accepts "X years of PM OR equivalent / adjacent / technical / related experience," OR asks ~2-5 years, OR uses "mid-level"/"IC" language, OR is PM II/III. -> meets_experience true.
+  moderate: JD asks ~5-7 years of product management, OR says "Senior" but the described scope is individual-contributor (no direct reports).
+  weak:     JD rigidly requires 5+ years of PURE product management with no adjacency clause, OR requires 8+ years, OR requires people management, OR is Director/VP/Head-of level. -> meets_experience false.
 
 LOCATION FIT:
-  strong:   Major US tech hubs, especially California: San Francisco, Bay Area,
-            Mountain View, Palo Alto, San Jose, Los Angeles, Santa Monica,
-            San Diego, Seattle, New York, Boston, Austin, Denver, Chicago.
-            Also strong: Remote or Hybrid with US eligibility.
-  moderate: Other US cities (Phoenix, Atlanta, Miami, Dallas, Raleigh, Nashville,
-            Salt Lake City, Portland, Philadelphia, etc.) or top international
-            locations (Amsterdam, Netherlands, London, EU with remote flexibility).
-  weak:     India, Southeast Asia, Latin America, Middle East, Africa, or any
-            location requiring in-country work authorization the candidate does
-            not have. Non-remote international roles outside US/EU.
+  strong:   Any US location (any city or state), Remote/Hybrid with US eligibility, or unspecified. Never penalize a specific US city.
+  moderate: US-eligible but ambiguous.
+  weak:     Genuinely non-US, or requires work authorization / relocation outside the US.
 
-── SCORING FORMULA ──
+BLOCKER: set blocker true only if the JD requires US citizenship, an active security clearance, a green card / permanent residency, or states no visa sponsorship ever. The candidate is on OPT and cannot take those.
 
-Start at 75. Adjust based on dimension ratings:
+SCORING FORMULA — start at 75, then adjust:
+  role_fit:     strong +15 | moderate +5 | weak -20
+  level_fit:    strong +10 | moderate +0 | weak -25
+  location_fit: strong +5  | moderate +0 | weak -15
+Cap at 100, floor at 0. A weak level_fit must land the role below 65.
 
-  role_fit:     strong +15  |  moderate +5   |  weak -20
-  level_fit:    strong +10  |  moderate +5   |  weak -15
-  location_fit: strong +5   |  moderate 0    |  weak -10
-
-Cap at 100, floor at 0.
-
-This means:
-  strong/strong/strong = 100 (cap)
-  strong/strong/moderate = 100 (cap)
-  strong/moderate/strong = 100 (cap)
-  moderate/strong/strong = 95
-  strong/moderate/moderate = 85
-  moderate/moderate/strong = 85
-  moderate/moderate/moderate = 85
-  strong/weak/strong = 75
-  weak on any dimension with no strong to compensate < 65
-
-If the JD is empty, score from title + location only. Note in reasoning
-that the JD was unavailable and discount role_fit by one tier.
+If blocker is true, the role is unusable regardless of fit: set score to 0.
+If the JD is empty/unavailable, score from title + location only, note that in reasoning, and discount role_fit by one tier.
 """
 
 
-def score_job(title: str, location: str, raw_jd: str) -> Optional[dict]:
+def score_job(title: str, location: str, raw_jd: str, role_family: Optional[str] = None) -> Optional[dict]:
     prompt = (
         f"CANDIDATE:\n{CANDIDATE_PROFILE}\n\n"
+        f"TITLE-SCREEN ROLE FAMILY GUESS: {role_family or 'unknown'}\n\n"
         f"JOB:\nTitle: {title}\nLocation: {location}\n\n"
-        f"Description:\n{(raw_jd or '')[:2000]}"
+        f"Description:\n{(raw_jd or '')[:7000]}"
     )
     try:
         r = httpx.post(
@@ -490,20 +326,50 @@ def score_job(title: str, location: str, raw_jd: str) -> Optional[dict]:
                 "content-type": "application/json",
             },
             json={
-                "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 200,
+                "model": SCORE_MODEL,
+                "max_tokens": 500,
                 "system": SCORE_SYSTEM,
                 "messages": [{"role": "user", "content": prompt}],
             },
-            timeout=30,
+            timeout=45,
         )
         r.raise_for_status()
         text = r.json()["content"][0]["text"].strip()
         text = re.sub(r"^```json\s*|\s*```$", "", text, flags=re.MULTILINE).strip()
-        return json.loads(text)
+        res = json.loads(text)
+        return _apply_score_guards(res)
     except Exception as e:
         log.warning(f"Score failed for '{title}': {e}")
         return None
+
+
+def _apply_score_guards(res: dict) -> dict:
+    """Deterministic caps so a good-sounding JD can't sneak past the real
+    disqualifiers, independent of model wording. Also folds role family +
+    years-required into the stored reasoning so the board shows them without
+    a schema change."""
+    try:
+        score = int(res.get("score", 0))
+    except (TypeError, ValueError):
+        score = 0
+
+    # Hard blocker (citizenship / clearance / green card / no-sponsorship): unusable.
+    if res.get("blocker") is True:
+        score = 0
+    # Experience/level miss: keep it below the match threshold regardless of how
+    # the model scored it (a weak level_fit or an explicit experience miss).
+    elif res.get("level_fit") == "weak" or res.get("meets_experience") is False:
+        score = min(score, 55)
+
+    res["score"] = max(0, min(100, score))
+
+    fam = res.get("role_family")
+    yrs = res.get("years_required")
+    tag = ""
+    if fam:
+        tag = f"[{fam}" + (f", {yrs}y req" if isinstance(yrs, int) else "") + "] "
+    res["reasoning"] = (tag + (res.get("reasoning") or ""))[:240]
+    return res
 
 
 # ── Supabase helpers ───────────────────────────────────────────────────────────
@@ -564,7 +430,9 @@ def main():
     companies_with_jobs = {j["company_id"] for j in existing_jobs}
 
     seen_this_run: set[tuple] = set()
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=CUTOFF_HOURS)
+    _now = datetime.now(timezone.utc)
+    cutoff           = _now - timedelta(hours=CUTOFF_HOURS)
+    first_run_cutoff = _now - timedelta(days=FIRST_RUN_DAYS)
 
     total_fetched = total_kept = total_scored = total_errors = 0
     all_scores: list[int] = []
@@ -581,9 +449,9 @@ def main():
             total_errors += 1
             continue
 
-        # First-time companies get no date filter so we seed the DB properly
+        # First-time companies seed a 30-day back-catalog; companies already in
+        # the DB get the tight ~24h incremental window.
         is_first_run = co_id not in companies_with_jobs
-        first_run_cutoff = datetime(2026, 6, 1, tzinfo=timezone.utc)
         active_cutoff = first_run_cutoff if is_first_run else cutoff
 
         postings = fetcher(ats_slug)
@@ -608,10 +476,18 @@ def main():
             time.sleep(0.5)
             continue
 
-        # Fetch full JD for Greenhouse PM roles only
-        if ats_type == "greenhouse":
-            for p in relevant:
+        # Hydrate the full JD for every kept role that doesn't already have one.
+        # Ashby and Lever include the JD in their list response; Greenhouse and
+        # Workday need a per-posting call. A real JD is what lets the scorer catch
+        # experience requirements ("7+ years") instead of guessing from the title.
+        for p in relevant:
+            if p.get("raw_jd"):
+                continue
+            if ats_type == "greenhouse":
                 p["raw_jd"] = fetch_greenhouse_jd(p["ats_job_id"], ats_slug)
+                time.sleep(0.2)
+            elif ats_type == "workday":
+                p["raw_jd"] = fetch_workday_jd(ats_slug, p.get("_ext_path", ""))
                 time.sleep(0.2)
 
         now = datetime.now(timezone.utc).isoformat()
@@ -655,7 +531,8 @@ def main():
         match_rows = []
         co_match_count = 0
         for job in to_score:
-            result = score_job(job["title"], job.get("location", ""), job.get("raw_jd", ""))
+            family = classify_role(job["title"])
+            result = score_job(job["title"], job.get("location", ""), job.get("raw_jd", ""), family)
             if result and isinstance(result.get("score"), int):
                 all_scores.append(result["score"])
                 if result["score"] >= SCORE_THRESHOLD:

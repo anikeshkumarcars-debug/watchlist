@@ -1,24 +1,37 @@
-- Name: Shailvi Kumar
-- Role target: Product Manager | Technical Product Manager | AI Product Manager | Product Manager, Platform
-- Seniority: Mid-level IC (2–5 YOE range in JDs, or "equivalent experience" language)
-- Background:
-  - 2+ years product ownership: roadmaps, PRDs, sprint planning, GTM, team of 7 engineers (GIVE)
-  - 4 years software engineering with increasing product responsibility (Goodera)
-  - AWS EC2 Sr. PMT intern: 0-to-1 product strategy for AI-powered developer tool (PathFinder)
-  - UCLA Anderson MBA, Class of 2026, Easton Technology Management Fellow
-  - B.Tech CS, NIT Rourkela
-- Skills: Python, JavaScript, SQL, HTML/CSS, Claude API, Anthropic SDK, GitHub Actions, n8n, Supabase, Lovable, Framer, AWS (EC2, Lambda, S3, RDS), Jira, Figma, Amplitude
-- Methods: PRDs, PRFAQs, roadmapping, OKRs, A/B testing, rapid prototyping, agile/scrum, user research, competitive analysis, go-to-market, stakeholder management, data-driven prioritization
-- Highlights:
-  - Built autonomous LLM pipelines (Claude API + GitHub Actions + Supabase)
-  - Built agentic workflows with tool-calling and prompt orchestration (n8n)
-  - Shipped 0-to-1 prototypes end-to-end as sole PM/builder
-  - Wrote production code for 5 years before moving to product
-  - Led cross-functional teams (engineering, design, data science, business)
-- Strong suits: AI/ML product, 0-to-1 builds, technical depth, rapid prototyping, cross-functional leadership
-- Location preference: San Francisco Bay Area / Los Angeles / Remote. Open to Seattle, NYC, Boston, Austin, Chicago, Denver.
-- Domain fit:
-- Strongly prefer: AI/ML products, LLM applications, developer tools, workflow automation, data platforms, internal tools/platforms, AI-native startups, applied-AI teams
-- Open to: B2B SaaS (with AI component), cloud infrastructure, productivity tools, growth-stage startups building AI features
-- Hard skip: gaming, defense/clearance, semiconductor, medtech/biotech, manufacturing, luxury retail, law firms, ad-tech, pure consumer social, hardware-only, automotive/AV, SAFe-required roles
-- Comp floor: $120K base (skip below unless exceptional equity)
+# Candidate: Shailvi Kumar
+
+Engineer-turned-product-leader. ~6 years shipping software + owning product before an MBA, still building agentic systems solo. Evaluate job fit against the rules below, not against company prestige.
+
+## Target role families (priority order)
+1. **AI Product Manager** — LLM/agent products, 0-to-1, AI features.
+2. **Technical Product Manager** — developer tools, platform, data, infra.
+3. **Forward Deployed Engineer / Applied AI Engineer** — first-class, not a fallback. Solutions Engineer/Architect, Deployment/Implementation Engineer count. Rewards the CS degree + 6 years shipping code + solo agentic builds. Score these on "engineer who ships next to the customer," not on PM ownership.
+4. **Cloud / Platform / Data PM.**
+
+## Experience (and how to weigh it)
+- ~6 years engineering + product ownership: Goodera (SWE → Lead Product Engineer, 4 yrs), GIVE (Product Owner / SDE III), then AWS Senior PM-Technical intern (Amazon Linux upgrade strategy) during the MBA.
+- B.Tech Computer Science (NIT Rourkela). UCLA Anderson MBA, Technology Leadership & AI, 2026. Easton Technology Management Fellow.
+- Builds: Daybreak (GitHub Actions + Claude API digest), Tailorbot (n8n JD→resume/cover-letter agent), Dossier, Watchlist, Sightline, Tidepool.
+- Stack: Python, JavaScript (MERN), SQL, REST APIs, cloud ETL pipelines, AWS (EC2/S3/RDS/Lambda), Claude API, n8n, Supabase, GitHub Actions.
+
+**Years-of-experience rule (important):**
+- Strong on roles asking for "X years of PM **or equivalent / adjacent / technical / related** experience" — the ~6 years of engineering + product ownership qualify.
+- Does **not** cleanly meet a rigid "5+ years of **product management**" bar when the JD demands pure PM tenure with no adjacency clause — treat level_fit as weak.
+- A hard "7+ years" requirement (PM or otherwise) with no adjacency is a real stretch — penalize.
+- Not seeking internships or new-grad roles.
+
+## Seniority
+Mid-to-senior individual contributor. Not a people manager. Roles at Director / VP / Head-of / Chief level are off-target. Staff / Principal / Lead / Senior IC titles are fine — judge on the actual experience bar, not the title word.
+
+## Location
+**Open to all US locations.** Remote (US) is great; any US metro is fine — do not prefer or penalize specific US cities. The only location problem is a role that is **non-US / requires relocation outside the US**. US or remote/unspecified location → location_fit strong.
+
+## Work authorization (hard blockers)
+On OPT (F-1) with ~3 years of runway (1 yr OPT + 2-yr STEM extension), so **no sponsorship is needed now**. A normal JD is fine even if it mentions future sponsorship.
+Flag as a blocker ONLY if the role requires: **US citizenship**, an active **security clearance**, a **green card / permanent resident** status, or explicitly states **"no visa sponsorship, ever / permanent work authorization required."**
+
+## Strengths
+AI/ML product, 0-to-1 builds, technical depth (reads and writes code), enterprise/customer-facing delivery, agentic workflows, cross-functional leadership.
+
+## Domains
+Strongest in: AI/ML and LLM products, developer tools, cloud/data platforms, workflow automation, applied-AI, technical/platform PM. Also open to general B2B SaaS (especially with an AI angle), fintech, productivity, and growth-stage startups. No industry is an automatic skip — judge each role on role/level/location/experience fit. (Defense/clearance roles are handled by the work-authorization blocker above, not by industry.)

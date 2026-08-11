@@ -1,5 +1,5 @@
 -- 001_initial_schema.sql
--- Watchlist schema: companies, jobs, matches, applications
+-- Watchlist schema: companies, jobs, matches
 -- Idempotent: safe to rerun via DROP IF EXISTS guards.
 -- If you're starting fresh, run this. If you already have data, skip to 003.
 
@@ -67,37 +67,6 @@ create table if not exists matches (
 create index if not exists idx_matches_score on matches (score desc);
 
 -- ============================================================
--- Applications: the watchlist state — written only via mark_application() RPC
--- ============================================================
-create table if not exists applications (
-  id              uuid primary key default gen_random_uuid(),
-  job_id          uuid not null references jobs(id) on delete cascade,
-  status          text not null check (status in ('interested', 'applied', 'screen', 'interview', 'offer', 'closed')),
-  applied_at      timestamptz,
-  updated_at      timestamptz not null default now(),
-  notes           text,
-  unique (job_id)
-);
-
-create index if not exists idx_applications_status on applications (status);
-
--- ============================================================
--- Auto-update updated_at on applications
--- ============================================================
-create or replace function set_updated_at()
-returns trigger as $$
-begin
-  new.updated_at = now();
-  return new;
-end;
-$$ language plpgsql;
-
-drop trigger if exists applications_updated_at on applications;
-create trigger applications_updated_at
-  before update on applications
-  for each row execute function set_updated_at();
-
--- ============================================================
 -- View: open matches above threshold, joined with company info
 -- Lovable reads from this for the main watchlist display.
 -- security_invoker = on ensures RLS policies are evaluated as the
@@ -123,12 +92,8 @@ select
   m.level_fit       as level_fit,
   m.location_fit    as location_fit,
   m.reasoning       as reasoning,
-  m.scored_at       as scored_at,
-  coalesce(a.status, 'untracked') as application_status,
-  a.applied_at      as applied_at,
-  a.notes           as application_notes
+  m.scored_at       as scored_at
 from jobs j
 join companies c on c.id = j.company_id
 left join matches m on m.job_id = j.id
-left join applications a on a.job_id = j.id
 where j.status = 'open';

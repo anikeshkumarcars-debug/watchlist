@@ -1,12 +1,14 @@
 name: Watchlist — discover new companies
 
-# Runs weekly on its own. Writes discovered companies straight to Supabase
+# Runs daily. Writes discovered companies straight to Supabase
 # (tagged source='discovered', tier=explore by default) — no manual paste
 # step. new_companies.sql is still generated each run as an audit log,
 # visible in the run summary, in case anything needs cleaning up after.
 on:
   schedule:
-    - cron: "0 6 * * *"   # Monday, 7 AM PT
+    # 13:00 UTC = 6:00 AM Pacific (PDT) / 5:00 AM (PST) — one hour before the
+    # fetch+score run (main.yml, 7 AM PT), so new companies are scored the same morning.
+    - cron: "0 13 * * *"
   workflow_dispatch:
     inputs:
       ats:
@@ -38,7 +40,7 @@ on:
 
 jobs:
   discover:
-    name: Scan ATS boards for open PM roles
+    name: Scan ATS boards for open PM/FDE roles
     runs-on: ubuntu-latest
     timeout-minutes: 45
 

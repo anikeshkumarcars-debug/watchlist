@@ -2,7 +2,10 @@ name: Watchlist — daily job fetch + score
 
 on:
   schedule:
-    - cron: "30 6 * * *"
+    # 14:00 UTC = 7:00 AM Pacific (PDT) / 6:00 AM (PST).
+    # Runs an hour after the discovery workflow (expand.yml, 6 AM PT) so newly
+    # discovered companies are already in Supabase when this scores.
+    - cron: "0 14 * * *"
   workflow_dispatch:
 
 jobs:
