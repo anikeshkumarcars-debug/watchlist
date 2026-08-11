@@ -1,12 +1,12 @@
 # Lovable prompt — paste this whole thing in
 
-Build a single-page public job board that reads from my connected Supabase project. This page is linked from my Framer portfolio and resume; visitors should be able to see exactly what I'm tracking. The page is read-only for visitors. The one write path is gated behind a password that only I know.
+Build a single-page public job board that reads from my connected Supabase project. This page is linked from my Framer portfolio and resume; visitors should be able to see exactly what I'm tracking. The page is fully read-only — there is no write path and no login.
 
 ---
 
 ## Connect Supabase
 
-Use my Project URL and anon (public) key. All reads use the anon key. Writes happen exclusively through Postgres RPCs `mark_application` and `clear_application`, which check a password server-side.
+Use my Project URL and anon (public) key. All reads use the anon key. The board is read-only: it only ever runs `select` against the `v_watchlist` view — no writes, no RPCs.
 
 ---
 
@@ -50,9 +50,7 @@ A single horizontal row containing five filter groups, separated by a thin verti
 
 3. **When**: pill buttons — `all time` `new today` `this week`. Same styling.
 
-4. **Status**: pill buttons — `all` `untracked` `applied`. Same styling.
-
-5. **Search**: small text input, 200px wide, placeholder "search company or role". Filters in real-time.
+4. **Search**: small text input, 200px wide, placeholder "search company or role". Filters in real-time.
 
 Default state: all filters set to "all" / first option, search empty. Active filters should also show a small "x" affordance to clear, OR the user can just click the "all" pill. Whichever is cleaner.
 
@@ -79,8 +77,6 @@ Columns (left to right):
 | flex 1     | company    | Company name + tier tag                                                    |
 | 160px      | location   | Location (#6B6B6B 13px)                                                    |
 | 90px       | posted     | Relative time ("today", "3d", "1w") — right-aligned, #6B6B6B 12px          |
-| 100px      | status     | Status pill (only if status is not "untracked")                            |
-| 48px       | _empty_    | Action button (only visible on row hover, see below)                        |
 
 Header row: small caps, 11px, #6B6B6B, letter-spacing 0.5px. Subtle 1px bottom border.
 
@@ -88,10 +84,9 @@ Body rows:
 - 56px tall
 - 1px bottom border #F5F5F5 between rows
 - Hover state: background #FAFAFA
-- Clicking anywhere in the row that isn't the action button opens the job URL in a new tab
+- Clicking anywhere in the row opens the job URL in a new tab
 - Show a small **NEW** pill (8px font, #FFE082 background, #876600 text, padded 2x4px, rounded 3px) next to the job title if `first_seen_at` is within the last 24 hours
 - The tier tag next to the company name is a tiny uppercase label, 10px, #6B6B6B, letter-spaced 0.4px — like "DREAM" or "STRONG" or "EXPLORE"
-- The status pill (when shown) is small rounded pill: applied = #0066FF bg / white text; screen/interview/offer = #0A7F3F bg / white text; closed = #6B6B6B bg / white text; interested = white bg / #0A0A0A text / #EEEEEE border
 
 ### Section 4: Empty state
 
@@ -105,48 +100,10 @@ After the table, a thin horizontal rule (#EEEEEE) and below it a small line:
 
 ---
 
-## The "mark applied" action — the only write path
-
-Each row has a tiny action button that appears on hover at the far right, 48px wide column. Render it as a small circle button (24px diameter, white background, #EEEEEE border, "···" inside). It exists in the row markup always; it's just invisible until hover.
-
-Clicking opens a small popover menu (anchored to the button, 200px wide, white card, subtle shadow):
-- "mark as interested"
-- "mark as applied"
-- "mark as screen"
-- "mark as interview"
-- "mark as offer"
-- "mark as closed"
-- (divider)
-- "untrack" (if currently tracked)
-
-Hovering any option highlights it #FAFAFA. Clicking one fires the write flow:
-
-1. If no password is cached this session, show a small modal (centered, 380px wide):
-   - Title: "enter password to edit" (15px, semibold)
-   - Subtitle: "this is read-only for visitors. the owner can update status here." (12px, #6B6B6B)
-   - Password input (focused on open)
-   - Checkbox: "remember on this device" — checked by default
-   - "Cancel" / "Submit" buttons (Submit is #0A0A0A bg, white text)
-
-2. On submit, call the appropriate RPC:
-   - For status changes: `supabase.rpc('mark_application', { p_password, p_job_id: row.job_id, p_status: 'applied', p_notes: null })`
-   - For untrack: `supabase.rpc('clear_application', { p_password, p_job_id: row.job_id })`
-
-3. Cache the password in `localStorage` (if "remember" checked) or `sessionStorage` (otherwise), key `watchlist_pwd`.
-
-4. On RPC success: close modal, optimistically update the row, then refetch the view.
-
-5. On RPC failure with "unauthorized" in error message: clear cached password, show modal again with inline error "wrong password — try again" in #C0392B.
-
-For subsequent edits in the same session, the modal is skipped and the action runs directly using the cached password. If that fails (e.g. password was rotated), fall back to modal.
-
-**Important**: visitors who don't know the password should still have a perfectly functional read-only experience. They can hover, see the action button exists, click it, see the modal — and the modal copy explicitly tells them it's read-only for visitors. No confusion.
-
----
-
 ## Behavior details
 
-- **No drag-and-drop**, no kanban, no separate application pipeline section. Just the one table.
+- The board is **read-only**. No write path, no "mark applied", no login, no password.
+- **No drag-and-drop**, no kanban, no application pipeline section. Just the one table.
 - All filters are client-side (no Supabase round-trip per filter change). Apply against the initial query result.
 - Filters compose with AND — score=80+ AND tier=dream AND search="anthropic" intersects to a smaller list.
 - On page load, no flash-of-empty-state — show a subtle skeleton (gray rows) until data arrives.
@@ -159,10 +116,10 @@ For subsequent edits in the same session, the modal is skipped and the action ru
 
 ## Out of scope (do NOT build these)
 
+- Any write path, status tracking, or "mark applied" flow
 - Kanban / pipeline view
 - Company logos
-- Notes editor inline (notes are managed in Supabase Studio)
 - Drag-and-drop
 - Real-time subscriptions
-- Authentication beyond the single password
+- Authentication / login / passwords
 - Bulk actions

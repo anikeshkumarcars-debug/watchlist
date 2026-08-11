@@ -5,9 +5,9 @@ expand_companies.py
 Wide-net company discovery. Reads the bundled Greenhouse / Ashby / Lever /
 Workday slug lists in data/ (~12,500 companies total), skips anything
 already in your Supabase `companies` table, then live-checks each
-remaining candidate's job board for an actual open PM role (reusing the
-same title/location filter as fetch_and_score.py). Only companies with a
-real, current PM opening get written out — no guessing by name.
+remaining candidate's job board for an actual open PM or FDE role (reusing
+the same title/location filter as fetch_and_score.py). Only companies with a
+real, current PM/FDE opening get written out — no guessing by name.
 
 This makes zero Claude API calls, so discovery is free regardless of how
 wide you set --limit. The only cost this feeds is downstream: every
@@ -28,34 +28,15 @@ Output:   new_companies.sql — review it, then run in the Supabase SQL editor
 import argparse, asyncio, csv, os, re, sys
 import httpx
 
-# Keep in sync with PM_KEYWORDS / EXCLUDE_KEYWORDS / TARGET_LOCATIONS in fetch_and_score.py
-PM_KEYWORDS = ["product manager", "product management", "senior pm", "pm ii",
-               "pm i", "pm 2", "pm 1", "product lead", "product builder"]
-EXCLUDE_KEYWORDS = ["director", "vp ", "vice president", "head of product", "chief product",
-                     "intern", "apprentice", "principal pm", "group product manager",
-                     "technical program manager", "program manager", "marketing", "designer",
-                     "engineer", "scientist", "analyst", "counsel", "recruiter", "operations",
-                     "account executive", "account manager", "sales", "support", "coordinator"]
-TARGET_LOCATIONS = ["san francisco", "bay area", "san jose", "mountain view", "palo alto",
-                     "menlo park", "sunnyvale", "redwood city", "seattle", "austin", "boston",
-                     "new york", "nyc", "los angeles", "irvine", "culver city", "chicago",
-                     "remote", "hybrid", "united states", "usa", ", ca", ", wa", ", ny",
-                     ", tx", ", ma", ", il", ", or"]
+# Title classification (PM + FDE families) and the US-wide location filter are
+# imported from filters.py so discovery and the daily scorer use identical rules.
+from filters import classify_role, is_us_location
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 WORKDAY_URL_RE = re.compile(r"^https://([\w-]+)\.(wd\d+)\.myworkdayjobs\.com/([\w./-]+)$", re.I)
 
 SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
-
-
-def is_pm_role(title: str) -> bool:
-    t = title.lower()
-    return any(k in t for k in PM_KEYWORDS) and not any(k in t for k in EXCLUDE_KEYWORDS)
-
-
-def is_target_location(loc: str) -> bool:
-    return not loc.strip() or any(k in loc.lower() for k in TARGET_LOCATIONS)
 
 
 def existing_slugs() -> set[tuple[str, str]]:
@@ -71,7 +52,7 @@ def existing_slugs() -> set[tuple[str, str]]:
 
 def upsert_companies(rows: list[dict]) -> int:
     """Writes discovered companies straight to Supabase. Idempotent via
-    on_conflict — safe to run weekly without re-checking what's already there
+    on_conflict — safe to run daily without re-checking what's already there
     (existing_slugs() already filters those out before we get here anyway)."""
     if not rows:
         return 0
@@ -136,7 +117,7 @@ async def check_greenhouse(client, slug, sem):
         for p in postings:
             title = p.get("title") or ""
             loc = (p.get("location") or {}).get("name", "")
-            if is_pm_role(title) and is_target_location(loc):
+            if classify_role(title) is not None and is_us_location(loc):
                 return title
         return None
 
@@ -153,7 +134,7 @@ async def check_ashby(client, slug, sem):
         for p in postings:
             title = p.get("title") or ""
             loc = p.get("locationName", "")
-            if is_pm_role(title) and is_target_location(loc):
+            if classify_role(title) is not None and is_us_location(loc):
                 return title
         return None
 
@@ -172,7 +153,7 @@ async def check_lever(client, slug, sem):
         for p in postings:
             title = p.get("text") or ""
             loc = (p.get("categories") or {}).get("location", "")
-            if is_pm_role(title) and is_target_location(loc):
+            if classify_role(title) is not None and is_us_location(loc):
                 return title
         return None
 
@@ -201,7 +182,7 @@ async def check_workday(client, slug, sem):
         for p in postings:
             title = p.get("title") or ""
             loc = p.get("locationsText", "")
-            if is_pm_role(title) and is_target_location(loc):
+            if classify_role(title) is not None and is_us_location(loc):
                 return title
         return None
 
@@ -271,7 +252,7 @@ def main():
     # got added and why, even when writing straight to Supabase below.
     with open("new_companies.sql", "w") as f:
         f.write("-- Auto-discovered via expand_companies.py.\n")
-        f.write("-- Each row had at least one open role matching your PM/location filters at scan time.\n")
+        f.write("-- Each row had at least one open role matching your PM/FDE + US-location filters at scan time.\n")
         f.write("insert into companies (name, ats_type, ats_slug, tier, active, source, notes) values\n")
         rows = [
             f"  ('{esc(name)}', '{ats_type}', '{esc(slug)}', '{args.tier}', true, 'discovered', "
