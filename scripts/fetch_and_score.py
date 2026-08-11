@@ -327,15 +327,30 @@ def score_job(title: str, location: str, raw_jd: str, role_family: Optional[str]
             },
             json={
                 "model": SCORE_MODEL,
-                "max_tokens": 500,
+                "max_tokens": 1024,
+                # Sonnet 5 runs adaptive thinking by DEFAULT when `thinking` is
+                # omitted, and max_tokens caps thinking + output together — so a
+                # small budget gets eaten by thinking and the JSON never lands
+                # (or content[0] is a thinking block). We want a fast, cheap,
+                # deterministic JSON verdict here, so disable thinking; the
+                # rubric does the reasoning.
+                "thinking": {"type": "disabled"},
                 "system": SCORE_SYSTEM,
                 "messages": [{"role": "user", "content": prompt}],
             },
             timeout=45,
         )
         r.raise_for_status()
-        text = r.json()["content"][0]["text"].strip()
+        # With thinking disabled the first block is text, but be robust: pick the
+        # text block explicitly rather than assuming content[0].
+        blocks = r.json().get("content", [])
+        text = next((b.get("text", "") for b in blocks if b.get("type") == "text"), "").strip()
         text = re.sub(r"^```json\s*|\s*```$", "", text, flags=re.MULTILINE).strip()
+        # Isolate the JSON object if any stray prose slipped in around it.
+        if not text.startswith("{"):
+            m = re.search(r"\{.*\}", text, re.DOTALL)
+            if m:
+                text = m.group(0)
         res = json.loads(text)
         return _apply_score_guards(res)
     except Exception as e:
