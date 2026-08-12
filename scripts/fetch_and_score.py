@@ -3,8 +3,10 @@
 fetch_and_score.py
 ------------------
 Pulls open jobs from each ATS, filters by PM/FDE title + US location + recency,
-fetches the full JD, scores the relevant ones against the candidate profile via
-Claude (Sonnet), and upserts matches into Supabase.
+fetches the JD, and scores relevant jobs against the candidate profile in two
+stages (cheap Haiku screen -> Sonnet confirm for the promising few), then upserts
+matches into Supabase. The candidate profile + rubric ride in a cached system
+block to keep per-call token cost down.
 
 Title classification (PM + FDE families) and the US-wide location filter live in
 filters.py, shared with expand_companies.py.
@@ -14,8 +16,13 @@ Env vars (GitHub Actions secrets):
   SUPABASE_SERVICE_KEY  service_role key
   ANTHROPIC_API_KEY     Claude API key
 
-Optional:
+Optional (cost/behavior knobs):
   SCORE_THRESHOLD       Min score to store a match (default: 65)
+  SCORE_MODEL_STAGE1    Cheap screening model (default: claude-haiku-4-5)
+  SCORE_MODEL_STAGE2    Confirmation model (default: claude-sonnet-5)
+  STAGE1_PASS           Haiku score that escalates to Sonnet (default: 55)
+  JD_MAX_CHARS          JD chars sent to the model (default: 3000)
+  FIRST_RUN_DAYS        Back-catalog window for a new company (default: 14)
 """
 
 import os, json, time, logging, re
@@ -41,6 +48,17 @@ SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 ANTHROPIC_API_KEY    = os.environ["ANTHROPIC_API_KEY"]
 SCORE_THRESHOLD      = int(os.getenv("SCORE_THRESHOLD", "65"))
 
+# Two-stage scoring to keep cost down: a cheap Haiku pass screens every job, and
+# only jobs that clear STAGE1_PASS get the authoritative (pricier) Sonnet verdict.
+# ~97% of jobs are rejected, so this keeps the expensive model off the rejects.
+SCORE_MODEL_STAGE1 = os.getenv("SCORE_MODEL_STAGE1", "claude-haiku-4-5")   # screen
+SCORE_MODEL_STAGE2 = os.getenv("SCORE_MODEL_STAGE2", "claude-sonnet-5")    # confirm
+STAGE1_PASS        = int(os.getenv("STAGE1_PASS", "55"))   # Haiku >= this -> Sonnet
+JD_MAX_CHARS       = int(os.getenv("JD_MAX_CHARS", "3000"))  # JD chars sent to the model
+
+# Per-run call counters, surfaced in the final log line for cost visibility.
+SCORE_STATS = {"stage1": 0, "stage2": 0}
+
 HEADERS_SB = {
     "apikey": SUPABASE_SERVICE_KEY,
     "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
@@ -53,7 +71,7 @@ HEADERS_SB = {
 # NOTE: postings with no date (all Workday, some others) can't be dated, so they
 # are always kept regardless of either window.
 CUTOFF_HOURS   = 26  # slightly over 24h to avoid missing jobs near the boundary
-FIRST_RUN_DAYS = 30  # back-catalog window the first time a company is seen
+FIRST_RUN_DAYS = int(os.getenv("FIRST_RUN_DAYS", "14"))  # back-catalog window the first time a company is seen
 
 # ── Candidate profile ──────────────────────────────────────────────────────────
 # Lives in profile/candidate_profile.md so it can be edited without touching code.
@@ -258,8 +276,7 @@ ATS_FETCHERS = {
 }
 
 # ── Claude Scoring ─────────────────────────────────────────────────────────────
-
-SCORE_MODEL = "claude-sonnet-5"
+# Models are configured above (SCORE_MODEL_STAGE1 / STAGE2).
 
 SCORE_SYSTEM = """You are a job-fit evaluator for one specific candidate. Judge how well THIS candidate fits THIS role. Company prestige is irrelevant: a famous AI lab role that rigidly demands 8 years of product management is a BAD fit and must score low.
 
@@ -310,13 +327,40 @@ If the JD is empty/unavailable, score from title + location only, note that in r
 """
 
 
-def score_job(title: str, location: str, raw_jd: str, role_family: Optional[str] = None) -> Optional[dict]:
+# The rubric + candidate profile are byte-identical on every call, so put them in
+# a cached `system` block. On a warm cache (calls are <1s apart within a run) these
+# ~1,100 tokens bill at 0.1x instead of full price on every one of ~1,300 calls.
+# Caches are per-model, so both stages get their own warm cache. No beta header
+# needed for basic ephemeral caching on the raw HTTP API.
+SCORE_SYSTEM_BLOCKS = [{
+    "type": "text",
+    "text": SCORE_SYSTEM + "\n\nCANDIDATE PROFILE:\n" + CANDIDATE_PROFILE,
+    "cache_control": {"type": "ephemeral"},
+}]
+
+
+def _call_model(model: str, title: str, location: str, raw_jd: str,
+                role_family: Optional[str] = None) -> Optional[dict]:
+    """One scoring call against `model`. Returns the guarded verdict dict, or None
+    on any failure. The candidate profile lives in the cached system block, so the
+    user message carries only the varying job."""
     prompt = (
-        f"CANDIDATE:\n{CANDIDATE_PROFILE}\n\n"
         f"TITLE-SCREEN ROLE FAMILY GUESS: {role_family or 'unknown'}\n\n"
         f"JOB:\nTitle: {title}\nLocation: {location}\n\n"
-        f"Description:\n{(raw_jd or '')[:7000]}"
+        f"Description:\n{(raw_jd or '')[:JD_MAX_CHARS]}"
     )
+    payload = {
+        "model": model,
+        "max_tokens": 1024,
+        "system": SCORE_SYSTEM_BLOCKS,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    # Sonnet 5 (and other 4.6+ models) run adaptive thinking by DEFAULT, which eats
+    # max_tokens and truncates the JSON — disable it. Haiku 4.5 doesn't think by
+    # default and rejects {"type":"disabled"}, so for it we leave thinking off by
+    # omission rather than sending the (invalid) disable flag.
+    if "haiku" not in model:
+        payload["thinking"] = {"type": "disabled"}
     try:
         r = httpx.post(
             "https://api.anthropic.com/v1/messages",
@@ -325,24 +369,11 @@ def score_job(title: str, location: str, raw_jd: str, role_family: Optional[str]
                 "anthropic-version": "2023-06-01",
                 "content-type": "application/json",
             },
-            json={
-                "model": SCORE_MODEL,
-                "max_tokens": 1024,
-                # Sonnet 5 runs adaptive thinking by DEFAULT when `thinking` is
-                # omitted, and max_tokens caps thinking + output together — so a
-                # small budget gets eaten by thinking and the JSON never lands
-                # (or content[0] is a thinking block). We want a fast, cheap,
-                # deterministic JSON verdict here, so disable thinking; the
-                # rubric does the reasoning.
-                "thinking": {"type": "disabled"},
-                "system": SCORE_SYSTEM,
-                "messages": [{"role": "user", "content": prompt}],
-            },
+            json=payload,
             timeout=45,
         )
         r.raise_for_status()
-        # With thinking disabled the first block is text, but be robust: pick the
-        # text block explicitly rather than assuming content[0].
+        # Pick the text block explicitly rather than assuming content[0].
         blocks = r.json().get("content", [])
         text = next((b.get("text", "") for b in blocks if b.get("type") == "text"), "").strip()
         text = re.sub(r"^```json\s*|\s*```$", "", text, flags=re.MULTILINE).strip()
@@ -354,8 +385,25 @@ def score_job(title: str, location: str, raw_jd: str, role_family: Optional[str]
         res = json.loads(text)
         return _apply_score_guards(res)
     except Exception as e:
-        log.warning(f"Score failed for '{title}': {e}")
+        log.warning(f"Score failed ({model}) for '{title}': {e}")
         return None
+
+
+def score_job(title: str, location: str, raw_jd: str, role_family: Optional[str] = None) -> Optional[dict]:
+    """Two-stage scorer. The cheap Haiku screen runs on every job; only jobs that
+    clear STAGE1_PASS get the authoritative (pricier) Sonnet verdict — so the
+    expensive model never spends tokens rejecting the ~97% that don't fit."""
+    SCORE_STATS["stage1"] += 1
+    screen = _call_model(SCORE_MODEL_STAGE1, title, location, raw_jd, role_family)
+    if screen is None:
+        return None
+    if int(screen.get("score", 0)) >= STAGE1_PASS:
+        SCORE_STATS["stage2"] += 1
+        confirmed = _call_model(SCORE_MODEL_STAGE2, title, location, raw_jd, role_family)
+        if confirmed is not None:
+            return confirmed  # Sonnet is authoritative
+        # Sonnet failed — keep the Haiku screen rather than dropping the job.
+    return screen
 
 
 def _apply_score_guards(res: dict) -> dict:
@@ -584,7 +632,8 @@ def main():
     score_summary = f"avg_score={sum(all_scores)/len(all_scores):.0f}" if all_scores else "no jobs scored"
     log.info(
         f"=== Done. companies={len(companies)} fetched={total_fetched} kept={total_kept} "
-        f"scored={total_scored} closed={closed_count} errors={total_errors} ({score_summary}) ==="
+        f"scored={total_scored} closed={closed_count} errors={total_errors} "
+        f"haiku_calls={SCORE_STATS['stage1']} sonnet_calls={SCORE_STATS['stage2']} ({score_summary}) ==="
     )
     if companies_with_matches:
         log.info(f"New matches from: {', '.join(companies_with_matches)}")
