@@ -10,8 +10,8 @@ GitHub Actions (7 AM PT daily)
        ├─ pulls companies from Supabase
        ├─ fetches postings from Greenhouse / Ashby / Lever / Workday
        ├─ keeps PM + FDE titles in any US location (filters.py)
-       ├─ fetches the full JD for each kept role
-       ├─ scores each new job against the candidate profile via Claude Sonnet
+       ├─ fetches the JD for each kept role
+       ├─ scores each new job two-stage: Haiku screens → Sonnet confirms the top ones
        └─ upserts jobs + matches into Supabase
             └─ Lovable reads v_watchlist view → public board
 
@@ -147,7 +147,12 @@ Run the offline check for both:
 python scripts/filters.py --selftest
 ```
 
-**Scoring.** The candidate profile is in `profile/candidate_profile.md` — update it as your experience changes; it's injected into every scoring call. The scorer uses **Claude Sonnet** (`SCORE_MODEL` in `fetch_and_score.py`) with a rubric that:
+**Scoring is two-stage, to keep token cost down.** The candidate profile is in `profile/candidate_profile.md` — update it as your experience changes. Because ~97% of scanned jobs get rejected, a cheap model does the screening and the pricey one only judges the promising few:
+
+- **Stage 1 — Claude Haiku** (`SCORE_MODEL_STAGE1`) scores *every* kept job.
+- **Stage 2 — Claude Sonnet** (`SCORE_MODEL_STAGE2`) re-scores *only* jobs whose Haiku score ≥ `STAGE1_PASS` (default 55) — the authoritative verdict. Sub-55 jobs keep the Haiku score (below the 65 match threshold anyway) and never touch Sonnet.
+
+Both stages use the same rubric, which:
 
 - picks the right lens per role family (product-ownership fit for PM, ships-next-to-the-customer fit for FDE),
 - applies the profile's **years-of-experience rule** (roles accepting "PM *or equivalent / adjacent / technical* experience" score well; rigid "5+/7+ years of pure PM, no adjacency" roles get a weak `level_fit` and are capped below threshold in code),
@@ -156,9 +161,9 @@ python scripts/filters.py --selftest
 
 Deterministic caps in `_apply_score_guards()` enforce the blocker/experience rules regardless of model wording, and fold the detected role family + years-required into the stored `reasoning` (so the board shows them without a schema change).
 
-`SCORE_THRESHOLD` (default 65) is the minimum score stored as a match. Jobs below it are still stored in `jobs` but won't appear in `v_watchlist` (which requires a match row). Raise to 70 for a cleaner board; lower to 55 to see more.
+**Cost knobs** (all env-overridable): the profile + rubric ride in a **cached** `system` block (repeat calls bill those ~1,100 tokens at 0.1×); `JD_MAX_CHARS` (default 3000) caps how much of each JD is sent; `FIRST_RUN_DAYS` (default 14) bounds the back-catalog a brand-new company seeds. The final log line reports `haiku_calls` / `sonnet_calls` so you can see the split. Together these turn a full reset from ~$20 into a few dollars, and incremental daily runs into cents (only genuinely new postings are ever scored; existing matches are never re-scored).
 
-Daily cost scales with the number of *companies with active postings*, not the total list — quiet companies cost nothing that day. Sonnet + full-JD fetching costs more per scored job than the old Haiku-on-a-truncated-JD setup (roughly a few cents to low dimes per daily run at ~35 active companies), but only genuinely new postings are ever scored (existing matches are never re-scored).
+`SCORE_THRESHOLD` (default 65) is the minimum score stored as a match. Jobs below it are still stored in `jobs` but won't appear in `v_watchlist` (which requires a match row). Raise to 70 for a cleaner board; lower to 60 to see more.
 
 ---
 
