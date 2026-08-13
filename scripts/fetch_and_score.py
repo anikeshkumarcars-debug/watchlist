@@ -377,12 +377,16 @@ def _call_model(model: str, title: str, location: str, raw_jd: str,
         blocks = r.json().get("content", [])
         text = next((b.get("text", "") for b in blocks if b.get("type") == "text"), "").strip()
         text = re.sub(r"^```json\s*|\s*```$", "", text, flags=re.MULTILINE).strip()
-        # Isolate the JSON object if any stray prose slipped in around it.
-        if not text.startswith("{"):
-            m = re.search(r"\{.*\}", text, re.DOTALL)
-            if m:
-                text = m.group(0)
-        res = json.loads(text)
+        # Parse the FIRST JSON object and ignore anything after it. Haiku is
+        # chattier than Sonnet and often appends a sentence of explanation after
+        # the JSON despite "output only JSON" — plain json.loads() then throws
+        # "Extra data", which was silently dropping ~14% of scores. raw_decode
+        # reads one value and stops; skipping to the first "{" also tolerates any
+        # leading prose.
+        start = text.find("{")
+        if start > 0:
+            text = text[start:]
+        res, _ = json.JSONDecoder().raw_decode(text)
         return _apply_score_guards(res)
     except Exception as e:
         log.warning(f"Score failed ({model}) for '{title}': {e}")
