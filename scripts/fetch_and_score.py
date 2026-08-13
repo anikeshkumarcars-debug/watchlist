@@ -22,10 +22,10 @@ Optional (cost/behavior knobs):
   SCORE_MODEL_STAGE2    Confirmation model (default: claude-sonnet-5)
   STAGE1_PASS           Haiku score that escalates to Sonnet (default: 55)
   JD_MAX_CHARS          JD chars sent to the model (default: 3000)
-  FIRST_RUN_DAYS        Back-catalog window for a new company (default: 14)
+  FIRST_RUN_DAYS        Back-catalog window for a new company (default: 7)
 """
 
-import os, json, time, logging, re
+import os, json, time, logging, random, re
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 import httpx
@@ -57,7 +57,16 @@ STAGE1_PASS        = int(os.getenv("STAGE1_PASS", "55"))   # Haiku >= this -> So
 JD_MAX_CHARS       = int(os.getenv("JD_MAX_CHARS", "3000"))  # JD chars sent to the model
 
 # Per-run call counters, surfaced in the final log line for cost visibility.
-SCORE_STATS = {"stage1": 0, "stage2": 0}
+SCORE_STATS = {
+    "stage1": 0, "stage2": 0,
+    # Cache diagnostics — Anthropic warns when cache_control is set but never
+    # hits (e.g. our ~1,800-token prefix is below Haiku 4.5's 4,096-tok minimum
+    # so Haiku silently doesn't cache). Track per-model so the summary shows
+    # which stage is actually caching.
+    "cache_reads": {},    # {model: total tokens read from cache}
+    "cache_writes": {},   # {model: total tokens written to cache}
+    "input_tokens": {},   # {model: total uncached input tokens billed at full price}
+}
 
 HEADERS_SB = {
     "apikey": SUPABASE_SERVICE_KEY,
@@ -71,7 +80,7 @@ HEADERS_SB = {
 # NOTE: postings with no date (all Workday, some others) can't be dated, so they
 # are always kept regardless of either window.
 CUTOFF_HOURS   = 26  # slightly over 24h to avoid missing jobs near the boundary
-FIRST_RUN_DAYS = int(os.getenv("FIRST_RUN_DAYS", "14"))  # back-catalog window the first time a company is seen
+FIRST_RUN_DAYS = int(os.getenv("FIRST_RUN_DAYS", "7"))  # back-catalog window the first time a company is seen
 
 # ── Candidate profile ──────────────────────────────────────────────────────────
 # Lives in profile/candidate_profile.md so it can be edited without touching code.
@@ -373,8 +382,14 @@ def _call_model(model: str, title: str, location: str, raw_jd: str,
             timeout=45,
         )
         r.raise_for_status()
+        body = r.json()
+        # Track cache usage per model so we can see if caching is actually firing.
+        u = body.get("usage") or {}
+        SCORE_STATS["cache_reads"][model]  = SCORE_STATS["cache_reads"].get(model, 0)  + int(u.get("cache_read_input_tokens") or 0)
+        SCORE_STATS["cache_writes"][model] = SCORE_STATS["cache_writes"].get(model, 0) + int(u.get("cache_creation_input_tokens") or 0)
+        SCORE_STATS["input_tokens"][model] = SCORE_STATS["input_tokens"].get(model, 0) + int(u.get("input_tokens") or 0)
         # Pick the text block explicitly rather than assuming content[0].
-        blocks = r.json().get("content", [])
+        blocks = body.get("content", [])
         text = next((b.get("text", "") for b in blocks if b.get("type") == "text"), "").strip()
         text = re.sub(r"^```json\s*|\s*```$", "", text, flags=re.MULTILINE).strip()
         # Parse the FIRST JSON object and ignore anything after it. Haiku is
@@ -500,6 +515,19 @@ def main():
     _now = datetime.now(timezone.utc)
     cutoff           = _now - timedelta(hours=CUTOFF_HOURS)
     first_run_cutoff = _now - timedelta(days=FIRST_RUN_DAYS)
+
+    # Process order: FIRST-RUN companies (never seen before) first, then the
+    # known set in a fresh random order each run. Two wins:
+    #  - New discoveries always get their back-catalog seeded, even when we hit
+    #    the 120-min workflow timeout (previously the tail was starved).
+    #  - Known companies rotate day to day so no single group monopolises the
+    #    front and starves the rest.
+    first_run_cos = [c for c in companies if c["id"] not in companies_with_jobs]
+    known_cos     = [c for c in companies if c["id"] in companies_with_jobs]
+    random.shuffle(first_run_cos)   # fair order among new companies too
+    random.shuffle(known_cos)
+    companies = first_run_cos + known_cos
+    log.info(f"Order: {len(first_run_cos)} first-run companies queued first, then {len(known_cos)} known (shuffled)")
 
     total_fetched = total_kept = total_scored = total_errors = 0
     all_scores: list[int] = []
@@ -639,6 +667,16 @@ def main():
         f"scored={total_scored} closed={closed_count} errors={total_errors} "
         f"haiku_calls={SCORE_STATS['stage1']} sonnet_calls={SCORE_STATS['stage2']} ({score_summary}) ==="
     )
+    # Per-model cache diagnostics: read/write/uncached tokens, plus hit-rate.
+    # A cache-hit-rate of 0 with nonzero writes = prefix is below the model's
+    # minimum cacheable size and caching is silently off (see SCORE_STATS docstring).
+    for m_name in sorted(set(SCORE_STATS["input_tokens"]) | set(SCORE_STATS["cache_reads"]) | set(SCORE_STATS["cache_writes"])):
+        rd = SCORE_STATS["cache_reads"].get(m_name, 0)
+        wr = SCORE_STATS["cache_writes"].get(m_name, 0)
+        uc = SCORE_STATS["input_tokens"].get(m_name, 0)
+        denom = rd + uc
+        hit_pct = (100.0 * rd / denom) if denom else 0.0
+        log.info(f"    cache[{m_name}]: read={rd} written={wr} uncached_input={uc} hit_rate={hit_pct:.1f}%")
     if companies_with_matches:
         log.info(f"New matches from: {', '.join(companies_with_matches)}")
 
