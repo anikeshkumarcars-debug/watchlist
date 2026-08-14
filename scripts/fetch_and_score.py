@@ -457,14 +457,29 @@ def _apply_score_guards(res: dict) -> dict:
 # ── Supabase helpers ───────────────────────────────────────────────────────────
 
 def sb_get(path: str, params: dict = None) -> list[dict]:
-    r = httpx.get(
-        f"{SUPABASE_URL}/rest/v1/{path}",
-        headers=HEADERS_SB,
-        params=params,
-        timeout=20,
-    )
-    r.raise_for_status()
-    return r.json()
+    """Paginated GET. PostgREST caps a single response at max-rows (default 1000),
+    so a single httpx.get silently truncates anything beyond that — which was
+    exactly the bug making 700+ companies look FIRST RUN daily (their jobs fell
+    off the end of the 1000-row jobs page). We walk pages until we get a short
+    one, transparently to callers."""
+    page_size = 1000
+    offset = 0
+    out: list[dict] = []
+    base_params = dict(params or {})
+    while True:
+        page_params = {**base_params, "limit": str(page_size), "offset": str(offset)}
+        r = httpx.get(
+            f"{SUPABASE_URL}/rest/v1/{path}",
+            headers=HEADERS_SB,
+            params=page_params,
+            timeout=20,
+        )
+        r.raise_for_status()
+        batch = r.json()
+        out.extend(batch)
+        if len(batch) < page_size:
+            return out
+        offset += page_size
 
 
 def sb_upsert(table: str, rows: list[dict], on_conflict: str):
