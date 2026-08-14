@@ -630,16 +630,22 @@ def main():
             result = score_job(job["title"], job.get("location", ""), job.get("raw_jd", ""), family)
             if result and isinstance(result.get("score"), int):
                 all_scores.append(result["score"])
+                # Always persist the score, even sub-threshold. Otherwise `to_score`
+                # (jobs without a match row) re-scores every reject every day
+                # forever — the single biggest cost leak observed in production
+                # (~40% of daily Haiku calls were zombie re-scores).
+                # v_watchlist filters by score >= SCORE_THRESHOLD so the board
+                # still only shows matches.
+                match_rows.append({
+                    "job_id":       job["id"],
+                    "score":        result["score"],
+                    "role_fit":     result.get("role_fit"),
+                    "level_fit":    result.get("level_fit"),
+                    "location_fit": result.get("location_fit"),
+                    "reasoning":    result.get("reasoning", ""),
+                    "scored_at":    now,
+                })
                 if result["score"] >= SCORE_THRESHOLD:
-                    match_rows.append({
-                        "job_id":       job["id"],
-                        "score":        result["score"],
-                        "role_fit":     result.get("role_fit"),
-                        "level_fit":    result.get("level_fit"),
-                        "location_fit": result.get("location_fit"),
-                        "reasoning":    result.get("reasoning", ""),
-                        "scored_at":    now,
-                    })
                     total_scored += 1
                     co_match_count += 1
                     log.info(f"    {result['score']}: {job['title']}")

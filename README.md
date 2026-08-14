@@ -42,6 +42,10 @@ The board is read-only — there's no write path or password to configure.
 > Upgrading an older database that still has the application-tracking tables?
 > Run `sql/003_remove_applications.sql` once to drop them and rebuild the view.
 > A fresh install from the files above never creates them, so you can skip it.
+>
+> Also run `sql/004_filter_v_watchlist_by_score.sql` once — required so the
+> board keeps showing only ≥65 matches now that `fetch_and_score.py` stores
+> every score (the fix that stopped daily re-scoring of rejects).
 
 ### 2. GitHub repo
 
@@ -210,6 +214,7 @@ sql/
   001_initial_schema.sql
   002_rls_policies.sql
   003_remove_applications.sql   — one-time migration for older DBs (drops apply feature)
+  004_filter_v_watchlist_by_score.sql   — one-time migration: filter board to score >= 65
   seed.sql
 requirements.txt
 README.md
