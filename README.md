@@ -1,11 +1,11 @@
 # Watchlist Pipeline
 
-GitHub Actions cron job that fetches open Corporate Strategy and Business/Revenue Operations roles from ATS APIs, scores them against a candidate profile via the Claude API, and upserts results into Supabase. No frontend — browse results directly in the Supabase dashboard (Table Editor, or query `v_watchlist` in the SQL Editor).
+GitHub Actions workflow (manual trigger — no cron) that fetches open Corporate Strategy and Business/Revenue Operations roles from ATS APIs, scores them against a candidate profile via the Claude API, and upserts results into Supabase. No frontend — browse results directly in the Supabase dashboard (Table Editor, or query `v_watchlist` in the SQL Editor).
 
 **Architecture:**
 
 ```
-GitHub Actions (7 AM PT daily)
+GitHub Actions (manual: Run workflow)
   └─ fetch_and_score.py
        ├─ pulls companies from Supabase
        ├─ fetches postings from Greenhouse / Ashby / Lever / Workday
@@ -64,17 +64,18 @@ Go to **Settings → Secrets → Actions** and add:
 | `SUPABASE_SERVICE_KEY`| Supabase → Project Settings → API → service_role key (not anon) |
 | `ANTHROPIC_API_KEY`   | console.anthropic.com → API Keys |
 
-### 4. Trigger a manual run
+### 4. Trigger a run
 
-Go to **Actions → Watchlist — daily job fetch + score → Run workflow**.
+Go to **Actions → Watchlist — daily job fetch + score → Run workflow**. This workflow only ever runs when you click that button.
 
-Manual runs take three inputs:
+It takes four inputs:
 
 - `dry_run` (default **true**): fetch + filter + log only — **no Claude calls and no DB writes**, so it costs nothing. The log prints a `WOULD SCORE:` line for every posting a real run would score. Always do this first.
 - `max_companies` (default `0` = all): cap how many companies are processed, for a quick smoke test.
-- `first_run_days` (default `7`): how far back to look for a company being seen for the first time.
+- `first_run_days` (default `7`): how far back to look for a company being seen for the **first** time.
+- `lookback_hours` (default `168` = 1 week): how far back to look for companies **already** in the database. Set this longer than the gap between your manual runs, or postings in the gap are never inserted and so never scored.
 
-**For your first real run, set `first_run_days` to ~180.** A company's first run is the only chance to pick up its existing open postings, and many good roles are months old — Clutch's Toronto Strategy & Ops roles were 26-152 days old at seed time, so the default 7-day window would have missed all but one. After that first backfill every company is "known" and uses the tight ~24h window, so leave it at 7.
+**For your first real run, set `first_run_days` to ~180.** A company's first run is the only chance to pick up its existing open postings, and many good roles are months old — Clutch's Toronto Strategy & Ops roles were 26-152 days old at seed time, so the default 7-day window would have missed all but one. After that first backfill every company is "known" and uses `lookback_hours` instead, so leave `first_run_days` at 7.
 
 Once the dry-run log looks right, run again with `dry_run = false`.
 
@@ -93,13 +94,13 @@ select * from v_watchlist order by score desc limit 10;
 
 `scripts/expand_companies.py` reads a bundled local dataset (`data/*.csv`, ~12,500 companies across Greenhouse, Ashby, Lever, and Workday) — no external dependency, no cost, and about 6x the coverage of the old `--limit 2000` default.
 
-This runs automatically, **daily at 6 AM PT**, via **`.github/workflows/expand.yml`** — one hour before the fetch+score run — so newly found companies are scored the same morning. It writes new companies straight into Supabase (`tier=explore`, `source=discovered`, `active=true`). A company only gets written if it currently has a live posting matching your Strategy/BizOps + Toronto/remote-Canada filters — nothing gets added on name alone.
+Run it via **`.github/workflows/expand.yml`** (**Actions → Watchlist — discover new companies → Run workflow**) whenever you want to widen the list; new companies are picked up by your next `main.yml` run. It writes new companies straight into Supabase (`tier=explore`, `source=discovered`, `active=true`). A company only gets written if it currently has a live posting matching your Strategy/BizOps + Toronto/remote-Canada filters — nothing gets added on name alone.
 
 Every run still produces `new_companies.sql` as an audit log — visible in the GitHub Actions run summary and attached as a downloadable artifact — purely so you can see what got added and why, or clean up a bad match later with a one-line `update companies set active = false where ...`. It's a paper trail, not a gate.
 
 ### Trigger it manually / adjust scope
 
-Go to **Actions → Watchlist — discover new companies → Run workflow** any time you don't want to wait for the 6 AM run, or to scan a narrower slice:
+Inputs, if you want to scan a narrower slice:
 
 - `ats`: which platforms to check (default: all 4)
 - `limit`: cap candidates per ATS (default: 0 = full list)
@@ -190,18 +191,19 @@ Not every big employer is on Workday, Greenhouse, Ashby, or Lever — Garmin, fo
 
 ---
 
-## Cron schedule
+## Running it
 
-Two daily workflows, staggered so discovery finishes before scoring starts:
+**Both workflows are manual only — there is no cron.** Nothing runs, and nothing is billed to your Anthropic account, unless you click **Run workflow**.
 
-| Workflow | Time (Pacific) | Cron (UTC) | What it does |
-|----------|----------------|------------|--------------|
-| `.github/workflows/expand.yml` | 6 AM PT | `0 13 * * *` | discover new companies with live Strategy/BizOps roles → Supabase |
-| `.github/workflows/main.yml`   | 7 AM PT | `0 14 * * *` | fetch + score new postings → Supabase |
+| Workflow | What it does |
+|----------|--------------|
+| `.github/workflows/main.yml`   | fetch + score new postings → Supabase (costs a few cents per run) |
+| `.github/workflows/expand.yml` | discover new companies with live Strategy/BizOps roles → Supabase (free, no Claude calls) |
 
-Both leave results in Supabase before ~8 AM. GitHub Actions crons are fixed UTC (no DST), so in winter (PST) they run an hour earlier — still before 8 AM. Crons can also drift up to ~15 min under load. To change a time, edit the `cron:` line in that workflow.
+To put either back on a daily schedule, add a `schedule:` block back to its `on:` trigger — the original cron line is preserved in a comment at the top of each file.
 
-**Recency windows** (`fetch_and_score.py`): a company already in the DB only fetches its recent postings (`CUTOFF_HOURS`, ~last 24h); a brand-new company seeds a `FIRST_RUN_DAYS`-day back-catalog on its first run (default 7; raise it for the initial backfill). Postings with no date (all Workday) can't be dated, so they're always kept.
+
+**Recency windows** (`fetch_and_score.py`): a company already in the DB only fetches postings from the last `LOOKBACK_HOURS` (default 168 = 1 week — widen it if you run less often than that); a brand-new company seeds a `FIRST_RUN_DAYS`-day back-catalog on its first run (default 7; raise it for the initial backfill). Postings with no date (all Workday) can't be dated, so they're always kept.
 
 ---
 
@@ -210,8 +212,8 @@ Both leave results in Supabase before ~8 AM. GitHub Actions crons are fixed UTC 
 ```
 .github/
   workflows/
-    expand.yml           — daily cron 6 AM PT: company discovery (writes to Supabase)
-    main.yml             — daily cron 7 AM PT: fetch + score (writes to Supabase)
+    expand.yml           — manual: company discovery (writes to Supabase, free)
+    main.yml             — manual: fetch + score (writes to Supabase)
 data/
   greenhouse.csv          — ~4,970 companies
   ashby.csv                — ~2,860 companies

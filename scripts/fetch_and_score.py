@@ -93,7 +93,17 @@ HEADERS_SB = {
 #   - A brand-new company (no jobs yet) seeds a 30-day back-catalog on first run.
 # NOTE: postings with no date (all Workday, some others) can't be dated, so they
 # are always kept regardless of either window.
-CUTOFF_HOURS   = 26  # slightly over 24h to avoid missing jobs near the boundary
+# Incremental lookback for companies already in the DB. This used to be
+# hardcoded to 26h, which only made sense when a cron ran every morning: run
+# manually a week later and everything posted on days 2-7 is never inserted,
+# so it can never be scored — silently missed forever.
+#
+# Now that runs are manual, the default is a week. Widening this is close to
+# free: a posting is scored once ever (scoring is gated on whether a match row
+# exists, not on recency), so a wider window only adds genuinely new postings
+# you would have wanted anyway. Set it comfortably longer than the gap between
+# your runs.
+CUTOFF_HOURS = int(os.getenv("LOOKBACK_HOURS", "168"))  # 7 days
 FIRST_RUN_DAYS = int(os.getenv("FIRST_RUN_DAYS", "7"))  # back-catalog window the first time a company is seen
 
 # ── Candidate profile ──────────────────────────────────────────────────────────

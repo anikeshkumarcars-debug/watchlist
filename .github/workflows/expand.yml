@@ -1,14 +1,15 @@
 name: Watchlist — discover new companies
 
-# Runs daily. Writes discovered companies straight to Supabase
-# (tagged source='discovered', tier=explore by default) — no manual paste
-# step. new_companies.sql is still generated each run as an audit log,
-# visible in the run summary, in case anything needs cleaning up after.
+# MANUAL ONLY — there is no cron here by design. This runs when you click
+# "Run workflow", never on a schedule. Writes discovered companies straight
+# to Supabase (tagged source='discovered', tier=explore by default).
+# new_companies.sql is still generated each run as an audit log, visible in
+# the run summary, in case anything needs cleaning up after.
+#
+# To restore the daily schedule, add back:
+#   schedule:
+#     - cron: "0 13 * * *"    # 6 AM Pacific
 on:
-  schedule:
-    # 13:00 UTC = 6:00 AM Pacific (PDT) / 5:00 AM (PST) — one hour before the
-    # fetch+score run (main.yml, 7 AM PT), so new companies are scored the same morning.
-    - cron: "0 13 * * *"
   workflow_dispatch:
     inputs:
       ats:

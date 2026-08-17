@@ -1,11 +1,13 @@
 name: Watchlist — daily job fetch + score
 
+# MANUAL ONLY — there is no cron here by design. This runs when you click
+# "Run workflow", never on a schedule, so nothing is ever billed to the
+# Anthropic account without an explicit click.
+#
+# To restore the daily schedule, add back:
+#   schedule:
+#     - cron: "0 14 * * *"    # 7 AM Pacific
 on:
-  schedule:
-    # 14:00 UTC = 7:00 AM Pacific (PDT) / 6:00 AM (PST).
-    # Runs an hour after the discovery workflow (expand.yml, 6 AM PT) so newly
-    # discovered companies are already in Supabase when this scores.
-    - cron: "0 14 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -17,9 +19,13 @@ on:
         type: string
         default: "0"
       first_run_days:
-        description: "Back-catalog window for companies seen for the first time. Use ~180 for the initial backfill, then leave at 7."
+        description: "Back-catalog window for companies seen for the FIRST time. Use ~180 for the initial backfill, then leave at 7."
         type: string
         default: "7"
+      lookback_hours:
+        description: "How far back to look for companies already in the DB. Make this longer than the gap between your manual runs (168 = 1 week, 720 = 30 days)."
+        type: string
+        default: "168"
 
 jobs:
   fetch-and-score:
@@ -45,8 +51,10 @@ jobs:
           SUPABASE_URL:          ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY:  ${{ secrets.SUPABASE_SERVICE_KEY }}
           ANTHROPIC_API_KEY:     ${{ secrets.ANTHROPIC_API_KEY }}
-          # Scheduled runs always execute for real; only manual runs can dry-run.
-          DRY_RUN:               ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
-          MAX_COMPANIES:         ${{ github.event_name == 'workflow_dispatch' && inputs.max_companies || '0' }}
-          FIRST_RUN_DAYS:        ${{ github.event_name == 'workflow_dispatch' && inputs.first_run_days || '7' }}
+          # Manual-only workflow, so inputs are always present — no need to
+          # guard on github.event_name the way a cron-triggered run would.
+          DRY_RUN:               ${{ inputs.dry_run }}
+          MAX_COMPANIES:         ${{ inputs.max_companies }}
+          FIRST_RUN_DAYS:        ${{ inputs.first_run_days }}
+          LOOKBACK_HOURS:        ${{ inputs.lookback_hours }}
         run: python scripts/fetch_and_score.py
