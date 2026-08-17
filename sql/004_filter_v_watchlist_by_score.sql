@@ -1,10 +1,10 @@
 -- 004_filter_v_watchlist_by_score.sql
--- Board hygiene: hide sub-threshold scores from v_watchlist.
+-- View hygiene: hide sub-threshold scores from v_watchlist.
 --
 -- Context: fetch_and_score.py now stores EVERY score (even <65) as a match row
 -- so we don't re-score rejects every day (the biggest cost leak we had). But
 -- that means the raw v_watchlist would now surface hundreds of rejects. This
--- filter keeps the board showing only real matches, exactly as before.
+-- filter keeps the view showing only real matches, exactly as before.
 --
 -- Idempotent: safe to rerun. Run once in the Supabase SQL editor.
 
@@ -34,4 +34,6 @@ join matches m on m.job_id = j.id       -- inner join: must have a score
 where j.status = 'open'
   and m.score >= 65;                     -- match threshold (mirrors SCORE_THRESHOLD default)
 
-grant select on v_watchlist to anon, authenticated;
+-- No grant to anon/authenticated here — this view is queried via the
+-- Supabase dashboard (your own session), not the public API. See
+-- 002_rls_policies.sql for why anon/authenticated are locked out by default.

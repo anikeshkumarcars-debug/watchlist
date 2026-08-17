@@ -7,6 +7,19 @@ on:
     # discovered companies are already in Supabase when this scores.
     - cron: "0 14 * * *"
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Fetch + filter only — no Claude calls, no DB writes (free)"
+        type: boolean
+        default: true
+      max_companies:
+        description: "Cap companies processed (0 = all). Use a small number for a quick smoke test."
+        type: string
+        default: "0"
+      first_run_days:
+        description: "Back-catalog window for companies seen for the first time. Use ~180 for the initial backfill, then leave at 7."
+        type: string
+        default: "7"
 
 jobs:
   fetch-and-score:
@@ -32,4 +45,8 @@ jobs:
           SUPABASE_URL:          ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY:  ${{ secrets.SUPABASE_SERVICE_KEY }}
           ANTHROPIC_API_KEY:     ${{ secrets.ANTHROPIC_API_KEY }}
+          # Scheduled runs always execute for real; only manual runs can dry-run.
+          DRY_RUN:               ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
+          MAX_COMPANIES:         ${{ github.event_name == 'workflow_dispatch' && inputs.max_companies || '0' }}
+          FIRST_RUN_DAYS:        ${{ github.event_name == 'workflow_dispatch' && inputs.first_run_days || '7' }}
         run: python scripts/fetch_and_score.py

@@ -1,6 +1,6 @@
 # Watchlist Pipeline
 
-GitHub Actions cron job that fetches open Product Manager and Forward-Deployed / Applied-AI Engineer roles from ATS APIs, scores them against a candidate profile via the Claude API, and upserts results into Supabase. The Lovable frontend at [watchlist-product-management.lovable.app](https://watchlist-product-management.lovable.app) reads from Supabase and displays the live board.
+GitHub Actions cron job that fetches open Corporate Strategy and Business/Revenue Operations roles from ATS APIs, scores them against a candidate profile via the Claude API, and upserts results into Supabase. No frontend — browse results directly in the Supabase dashboard (Table Editor, or query `v_watchlist` in the SQL Editor).
 
 **Architecture:**
 
@@ -9,16 +9,16 @@ GitHub Actions (7 AM PT daily)
   └─ fetch_and_score.py
        ├─ pulls companies from Supabase
        ├─ fetches postings from Greenhouse / Ashby / Lever / Workday
-       ├─ keeps PM + FDE titles in any US location (filters.py)
+       ├─ keeps Strategy + BizOps titles in Toronto/GTA or remote-Canada (filters.py)
        ├─ fetches the JD for each kept role
        ├─ scores each new job two-stage: Haiku screens → Sonnet confirms the top ones
        └─ upserts jobs + matches into Supabase
-            └─ Lovable reads v_watchlist view → public board
+            └─ query v_watchlist view in Supabase directly (Table Editor / SQL Editor)
 
 expand_companies.py (run manually, whenever you want to widen the list)
   ├─ reads data/{greenhouse,ashby,lever,workday}.csv (~12.5k companies, bundled locally)
   ├─ skips anything already in Supabase
-  ├─ live-checks each remaining company's job board for an open PM or FDE role
+  ├─ live-checks each remaining company's job board for an open Strategy or BizOps role
   │  (no Claude calls — pure HTTP checks, free)
   └─ writes new_companies.sql for anything with a live match today
 ```
@@ -29,23 +29,26 @@ expand_companies.py (run manually, whenever you want to widen the list)
 
 ### 1. Supabase
 
+There's no frontend — this pipeline just writes to Supabase, and you browse
+results directly in the Supabase dashboard (Table Editor, or the SQL Editor
+querying `v_watchlist`).
+
 Run these SQL files in order in your Supabase SQL Editor:
 
 ```
 sql/001_initial_schema.sql   — tables (companies, jobs, matches) + v_watchlist view
-sql/002_rls_policies.sql     — public read, no anon writes
+sql/002_rls_policies.sql     — RLS enabled, no policies: locks out anon/authenticated by default
 sql/seed.sql                 — initial company list
+sql/004_filter_v_watchlist_by_score.sql   — required: filters v_watchlist to score >= 65
 ```
 
-The board is read-only — there's no write path or password to configure.
+The pipeline writes with the `service_role` key, which always bypasses RLS —
+so `002` has no effect on the pipeline itself, it only locks down the
+public-API (`anon`) path since there's no frontend that needs it.
 
 > Upgrading an older database that still has the application-tracking tables?
 > Run `sql/003_remove_applications.sql` once to drop them and rebuild the view.
 > A fresh install from the files above never creates them, so you can skip it.
->
-> Also run `sql/004_filter_v_watchlist_by_score.sql` once — required so the
-> board keeps showing only ≥65 matches now that `fetch_and_score.py` stores
-> every score (the fix that stopped daily re-scoring of rejects).
 
 ### 2. GitHub repo
 
@@ -65,7 +68,15 @@ Go to **Settings → Secrets → Actions** and add:
 
 Go to **Actions → Watchlist — daily job fetch + score → Run workflow**.
 
-Set **dry_run = true** first to validate the fetch without writing to DB. Check the logs. If companies and job counts look right, run again with dry_run = false.
+Manual runs take three inputs:
+
+- `dry_run` (default **true**): fetch + filter + log only — **no Claude calls and no DB writes**, so it costs nothing. The log prints a `WOULD SCORE:` line for every posting a real run would score. Always do this first.
+- `max_companies` (default `0` = all): cap how many companies are processed, for a quick smoke test.
+- `first_run_days` (default `7`): how far back to look for a company being seen for the first time.
+
+**For your first real run, set `first_run_days` to ~180.** A company's first run is the only chance to pick up its existing open postings, and many good roles are months old — Clutch's Toronto Strategy & Ops roles were 26-152 days old at seed time, so the default 7-day window would have missed all but one. After that first backfill every company is "known" and uses the tight ~24h window, so leave it at 7.
+
+Once the dry-run log looks right, run again with `dry_run = false`.
 
 ### 5. Verify in Supabase
 
@@ -82,7 +93,7 @@ select * from v_watchlist order by score desc limit 10;
 
 `scripts/expand_companies.py` reads a bundled local dataset (`data/*.csv`, ~12,500 companies across Greenhouse, Ashby, Lever, and Workday) — no external dependency, no cost, and about 6x the coverage of the old `--limit 2000` default.
 
-This runs automatically, **daily at 6 AM PT**, via **`.github/workflows/expand.yml`** — one hour before the fetch+score run — so newly found companies are scored the same morning. It writes new companies straight into Supabase (`tier=explore`, `source=discovered`, `active=true`). A company only gets written if it currently has a live posting matching your PM/FDE + US-location filters — nothing gets added on name alone.
+This runs automatically, **daily at 6 AM PT**, via **`.github/workflows/expand.yml`** — one hour before the fetch+score run — so newly found companies are scored the same morning. It writes new companies straight into Supabase (`tier=explore`, `source=discovered`, `active=true`). A company only gets written if it currently has a live posting matching your Strategy/BizOps + Toronto/remote-Canada filters — nothing gets added on name alone.
 
 Every run still produces `new_companies.sql` as an audit log — visible in the GitHub Actions run summary and attached as a downloadable artifact — purely so you can see what got added and why, or clean up a bad match later with a one-line `update companies set active = false where ...`. It's a paper trail, not a gate.
 
@@ -143,8 +154,8 @@ Two stages: a cheap deterministic **filter** (no Claude), then an LLM **score** 
 
 **Filters** live in `scripts/filters.py` — the single source of truth shared by `fetch_and_score.py` and `expand_companies.py` (they used to be copy-pasted and drifted). Two decisions:
 
-- `classify_role(title)` → `"pm" | "fde" | None`. Two target families: **PM** (Product Manager / Product Lead, any IC seniority) and **FDE** (Forward Deployed / Applied AI / Solutions / Deployment / Implementation Engineer). Only exec/people-manager titles (Director, VP, Head-of, Chief) and interns are hard-dropped; Staff / Principal / Lead / Group PM pass through and are judged by the scorer.
-- `is_us_location(location)` → keeps **all US locations + remote/unspecified**; drops only clearly non-US postings. (No metro allow-list — a role in Denver or Atlanta is kept, not silently dropped.)
+- `classify_role(title)` → `"strategy" | "bizops" | None`. Two target families: **Strategy** (Corporate Strategy / Strategy & Operations / Corporate Development) and **BizOps** (Business Operations / Revenue Operations / Sales Operations). Only exec/people-manager titles (Director, VP, Head-of, Chief) and interns are hard-dropped.
+- `is_ca_location(location)` → keeps **Toronto/GTA or remote-Canada + unspecified**; drops other Canadian cities with no remote option (e.g. Vancouver-only, Montreal-only) and anything non-Canadian. (No US allow-list — this pipeline is Canada-only.)
 
 Run the offline check for both:
 ```bash
@@ -158,14 +169,14 @@ python scripts/filters.py --selftest
 
 Both stages use the same rubric, which:
 
-- picks the right lens per role family (product-ownership fit for PM, ships-next-to-the-customer fit for FDE),
-- applies the profile's **years-of-experience rule** (roles accepting "PM *or equivalent / adjacent / technical* experience" score well; rigid "5+/7+ years of pure PM, no adjacency" roles get a weak `level_fit` and are capped below threshold in code),
-- treats **any US or remote location as strong** (location never drags a US role's score), and
-- flags hard **blockers** (US citizenship / clearance / green card / no-sponsorship-ever) and forces those to 0.
+- picks the right lens per role family (structured-analysis + executive-facing fit for Strategy, dashboards/process/reporting-ownership fit for BizOps),
+- applies the profile's **years-of-experience rule** (roles accepting 1-3 years of consulting/strategy/ops experience score well; rigid "5+/7+ years of pure in-house tenure, no consulting-equivalent clause" roles get a weak `level_fit` and are capped below threshold in code),
+- treats **Toronto/GTA or remote-Canada as strong** (a non-GTA Canadian city with no remote option, or anything non-Canadian, is weak), and
+- flags hard **blockers** (US citizenship, US-only work authorization, active US federal security clearance, or explicitly requiring a location outside Canada) and forces those to 0.
 
 Deterministic caps in `_apply_score_guards()` enforce the blocker/experience rules regardless of model wording, and fold the detected role family + years-required into the stored `reasoning` (so the board shows them without a schema change).
 
-**Cost knobs** (all env-overridable): the profile + rubric ride in a **cached** `system` block (repeat calls bill those ~1,100 tokens at 0.1×); `JD_MAX_CHARS` (default 3000) caps how much of each JD is sent; `FIRST_RUN_DAYS` (default 14) bounds the back-catalog a brand-new company seeds. The final log line reports `haiku_calls` / `sonnet_calls` so you can see the split. Together these turn a full reset from ~$20 into a few dollars, and incremental daily runs into cents (only genuinely new postings are ever scored; existing matches are never re-scored).
+**Cost knobs** (all env-overridable): the profile + rubric ride in a **cached** `system` block (repeat calls bill those ~1,100 tokens at 0.1×); `JD_MAX_CHARS` (default 3000) caps how much of each JD is sent; `FIRST_RUN_DAYS` (default 7) bounds the back-catalog a brand-new company seeds — raise it for the initial backfill (see above). The final log line reports `haiku_calls` / `sonnet_calls` so you can see the split. Together these turn a full reset from ~$20 into a few dollars, and incremental daily runs into cents (only genuinely new postings are ever scored; existing matches are never re-scored).
 
 `SCORE_THRESHOLD` (default 65) is the minimum score stored as a match. Jobs below it are still stored in `jobs` but won't appear in `v_watchlist` (which requires a match row). Raise to 70 for a cleaner board; lower to 60 to see more.
 
@@ -185,12 +196,12 @@ Two daily workflows, staggered so discovery finishes before scoring starts:
 
 | Workflow | Time (Pacific) | Cron (UTC) | What it does |
 |----------|----------------|------------|--------------|
-| `.github/workflows/expand.yml` | 6 AM PT | `0 13 * * *` | discover new companies with live PM/FDE roles → Supabase |
+| `.github/workflows/expand.yml` | 6 AM PT | `0 13 * * *` | discover new companies with live Strategy/BizOps roles → Supabase |
 | `.github/workflows/main.yml`   | 7 AM PT | `0 14 * * *` | fetch + score new postings → Supabase |
 
 Both leave results in Supabase before ~8 AM. GitHub Actions crons are fixed UTC (no DST), so in winter (PST) they run an hour earlier — still before 8 AM. Crons can also drift up to ~15 min under load. To change a time, edit the `cron:` line in that workflow.
 
-**Recency windows** (`fetch_and_score.py`): a company already in the DB only fetches its recent postings (`CUTOFF_HOURS`, ~last 24h); a brand-new company seeds a 30-day back-catalog on its first run (`FIRST_RUN_DAYS`). Postings with no date (all Workday) can't be dated, so they're always kept.
+**Recency windows** (`fetch_and_score.py`): a company already in the DB only fetches its recent postings (`CUTOFF_HOURS`, ~last 24h); a brand-new company seeds a `FIRST_RUN_DAYS`-day back-catalog on its first run (default 7; raise it for the initial backfill). Postings with no date (all Workday) can't be dated, so they're always kept.
 
 ---
 
@@ -209,7 +220,7 @@ data/
 scripts/
   fetch_and_score.py   — main daily pipeline
   expand_companies.py  — manual company-list widener
-  filters.py           — shared PM/FDE title + US-location filters (run --selftest)
+  filters.py           — shared Strategy/BizOps title + Toronto/remote-Canada location filters (run --selftest)
 sql/
   001_initial_schema.sql
   002_rls_policies.sql

@@ -68,7 +68,7 @@ create index if not exists idx_matches_score on matches (score desc);
 
 -- ============================================================
 -- View: open matches above threshold, joined with company info
--- Lovable reads from this for the main watchlist display.
+-- Queried directly via the Supabase dashboard (Table Editor / SQL Editor).
 -- security_invoker = on ensures RLS policies are evaluated as the
 -- caller (anon), not the view owner (postgres). Without this, anon
 -- could see rows that RLS should hide.

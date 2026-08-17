@@ -1,37 +1,46 @@
-# Candidate: Shailvi Kumar
+# Candidate: Anikesh Kumar
 
-Engineer-turned-product-leader. ~6 years shipping software + owning product before an MBA, still building agentic systems solo. Evaluate job fit against the rules below, not against company prestige.
+Strategy/operations consultant pivoting into in-house Corporate Strategy or
+Business Operations roles. Evaluate job fit against the rules below, not
+against company prestige.
 
 ## Target role families (priority order)
-1. **AI Product Manager** — LLM/agent products, 0-to-1, AI features.
-2. **Technical Product Manager** — developer tools, platform, data, infra.
-3. **Forward Deployed Engineer / Applied AI Engineer** — first-class, not a fallback. Solutions Engineer/Architect, Deployment/Implementation Engineer count. Rewards the CS degree + 6 years shipping code + solo agentic builds. Score these on "engineer who ships next to the customer," not on PM ownership.
-4. **Cloud / Platform / Data PM.**
+1. **Corporate Strategy / Strategy & Operations** — structured problem-solving, executive-facing recommendations, corporate development.
+2. **Business Operations / Revenue Operations** — dashboards, KPI tracking, process ownership, cross-functional execution.
+3. **Sales Operations / GTM Operations** — a viable adjacent target, judged under the BizOps lens.
 
 ## Experience (and how to weigh it)
-- ~6 years engineering + product ownership: Goodera (SWE → Lead Product Engineer, 4 yrs), GIVE (Product Owner / SDE III), then AWS Senior PM-Technical intern (Amazon Linux upgrade strategy) during the MBA.
-- B.Tech Computer Science (NIT Rourkela). UCLA Anderson MBA, Technology Leadership & AI, 2026. Easton Technology Management Fellow.
-- Builds: Daybreak (GitHub Actions + Claude API digest), Tailorbot (n8n JD→resume/cover-letter agent), Dossier, Watchlist, Sightline, Tidepool.
-- Stack: Python, JavaScript (MERN), SQL, REST APIs, cloud ETL pipelines, AWS (EC2/S3/RDS/Lambda), Claude API, n8n, Supabase, GitHub Actions.
+- ~2 years of external advisory/consulting: RSM Canada (Advisory Analyst, Jul 2024 - Jun 2026) and MNP LLP (Senior Consultant, Advisory Services, Jun 2026 - present) — leading cross-functional engagements end-to-end across Finance, IT, Operations, and Legal stakeholders for mid-market and high-growth tech/fintech/consumer clients; primary client contact from scoping through executive/Board-level delivery.
+- Prior corporate development / revenue operations co-op at Trulioo (high-growth B2B SaaS, Sep 2022 - Apr 2023): supported a full M&A lifecycle ($30M cash + $30M equity acquisition), built RevOps dashboards/KPI trackers/forecasting models, led a competitive "WhiteSpace" market analysis across 30 accounts and 15 countries.
+- B.Comm, Finance with a Business Analytics concentration, Sauder School of Business, UBC (2024), Dean's List.
+- Self-built a full-stack marketplace app (RentMy) end-to-end using AI coding tools (Claude Code, Rork) — Node.js/Express backend, Stripe, Supabase, Google Maps API. Signals hands-on builder/operator mindset and applied technical fluency, but this is a personal project, not professional software engineering experience — do not treat it as SWE-level technical experience.
+- Core skills: strategic analysis, financial modelling, KPI/dashboard development, M&A diligence, market research, executive presentations, cross-functional stakeholder management.
+- Technical skills: Advanced Excel, Python, SQL, SAS, Tableau, Power BI, Gen-AI tools.
 
 **Years-of-experience rule (important):**
-- Strong on roles asking for "X years of PM **or equivalent / adjacent / technical / related** experience" — the ~6 years of engineering + product ownership qualify.
-- Does **not** cleanly meet a rigid "5+ years of **product management**" bar when the JD demands pure PM tenure with no adjacency clause — treat level_fit as weak.
-- A hard "7+ years" requirement (PM or otherwise) with no adjacency is a real stretch — penalize.
-- Not seeking internships or new-grad roles.
+- Strong on roles asking for "1-3 years of consulting / strategy / analyst / operations experience," or that explicitly welcome a transition from consulting into an in-house strategy/ops role.
+- Moderate on roles asking ~3-5 years, or "Manager"-titled roles whose actual scope is individual-contributor.
+- Does **not** cleanly meet a rigid "5+ years of PURE in-house strategy/operations tenure" bar with no consulting-equivalent clause — treat level_fit as weak.
+- A hard "7+ years" requirement (with or without an adjacency clause) is a real stretch — penalize.
+- Not seeking internships or new-grad rotational programs.
 
-## Seniority
-Mid-to-senior individual contributor. Not a people manager. Roles at Director / VP / Head-of / Chief level are off-target. Staff / Principal / Lead / Senior IC titles are fine — judge on the actual experience bar, not the title word.
+## Seniority (hard ceiling — be strict)
+Individual contributor, early-career. **~2 years of post-university experience**, and not a people manager (no direct reports).
+
+**Off-target, always:** Senior Manager / Sr. Manager / "Senior *<function>* Manager" (e.g. "Senior Business Operations Manager"), Principal, Director, VP, Head-of, Chief, President, Chief of Staff. These normally carry 5-8+ years and direct reports — a level above this candidate. Do not surface them.
+
+**In range:** Analyst, Senior Analyst, Associate, Senior Associate, Manager (when the scope is individual-contributor), and Lead (genuinely ambiguous — at a small company it's often an IC role, so judge it on the JD's stated years requirement rather than the word).
+
+Judge on the actual experience bar, not the title word — but treat the off-target title list above as a ceiling regardless of what the JD body claims.
 
 ## Location
-**Open to all US locations.** Remote (US) is great; any US metro is fine — do not prefer or penalize specific US cities. The only location problem is a role that is **non-US / requires relocation outside the US**. US or remote/unspecified location → location_fit strong.
+**Toronto / GTA, or fully remote within Canada.** Do not prefer or penalize a specific GTA city (Toronto, Mississauga, Markham, Vaughan, etc. are all fine). A role based in another Canadian city with no remote option (Vancouver-only, Montreal-only, Calgary-only, etc.) is NOT a fit — flag location_fit weak. A genuinely non-Canadian role (US or otherwise), or one requiring relocation outside Canada, is also not a fit.
 
-## Work authorization (hard blockers)
-On OPT (F-1) with ~3 years of runway (1 yr OPT + 2-yr STEM extension), so **no sponsorship is needed now**. A normal JD is fine even if it mentions future sponsorship.
-Flag as a blocker ONLY if the role requires: **US citizenship**, an active **security clearance**, a **green card / permanent resident** status, or explicitly states **"no visa sponsorship, ever / permanent work authorization required."**
+## Work authorization
+Canadian citizen — no sponsorship or work-permit considerations apply, ever. The only location-adjacent blocker is a role that requires US citizenship, US-only work authorization, or an active US federal security clearance (these appear occasionally on cross-border postings and are unusable regardless of how good the rest of the fit looks).
 
 ## Strengths
-AI/ML product, 0-to-1 builds, technical depth (reads and writes code), enterprise/customer-facing delivery, agentic workflows, cross-functional leadership.
+Structured problem-solving under ambiguity, executive-ready communication, cross-functional stakeholder management (Finance/IT/Operations/Legal), dashboard/KPI/reporting ownership, M&A and market analysis, applying AI tools to accelerate analytical workflows, primary-client-contact ownership of engagements end-to-end.
 
 ## Domains
-Strongest in: AI/ML and LLM products, developer tools, cloud/data platforms, workflow automation, applied-AI, technical/platform PM. Also open to general B2B SaaS (especially with an AI angle), fintech, productivity, and growth-stage startups. No industry is an automatic skip — judge each role on role/level/location/experience fit. (Defense/clearance roles are handled by the work-authorization blocker above, not by industry.)
+Strongest in: technology, fintech, and B2B SaaS clients/employers (matches direct MNP/RSM/Trulioo experience). Also open to consumer and general professional/financial services. No industry is an automatic skip — judge each role on role/level/location/experience fit, not sector alone.

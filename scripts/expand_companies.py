@@ -5,15 +5,16 @@ expand_companies.py
 Wide-net company discovery. Reads the bundled Greenhouse / Ashby / Lever /
 Workday slug lists in data/ (~12,500 companies total), skips anything
 already in your Supabase `companies` table, then live-checks each
-remaining candidate's job board for an actual open PM or FDE role (reusing
+remaining candidate's job board for an actual open Strategy or BizOps role
+(reusing
 the same title/location filter as fetch_and_score.py). Only companies with a
-real, current PM/FDE opening get written out — no guessing by name.
+real, current Strategy/BizOps opening get written out — no guessing by name.
 
 This makes zero Claude API calls, so discovery is free regardless of how
 wide you set --limit. The only cost this feeds is downstream: every
 company written to new_companies.sql becomes a company the daily cron
 scores new postings for — which is exactly the set you want, since each
-one is already confirmed to have a live PM opening today.
+one is already confirmed to have a live Strategy/BizOps opening today.
 
 Usage:
   python expand_companies.py                              # all 4 ATS types, full local list
@@ -28,9 +29,10 @@ Output:   new_companies.sql — review it, then run in the Supabase SQL editor
 import argparse, asyncio, csv, os, re, sys
 import httpx
 
-# Title classification (PM + FDE families) and the US-wide location filter are
-# imported from filters.py so discovery and the daily scorer use identical rules.
-from filters import classify_role, is_us_location
+# Title classification (Strategy + BizOps families) and the Toronto/remote-
+# Canada location filter are imported from filters.py so discovery and the
+# daily scorer use identical rules.
+from filters import classify_role, is_ca_location
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 WORKDAY_URL_RE = re.compile(r"^https://([\w-]+)\.(wd\d+)\.myworkdayjobs\.com/([\w./-]+)$", re.I)
@@ -117,24 +119,29 @@ async def check_greenhouse(client, slug, sem):
         for p in postings:
             title = p.get("title") or ""
             loc = (p.get("location") or {}).get("name", "")
-            if classify_role(title) is not None and is_us_location(loc):
+            if classify_role(title) is not None and is_ca_location(loc):
                 return title
         return None
 
 
 async def check_ashby(client, slug, sem):
+    # See fetch_and_score.fetch_ashby: the posting API returns {"jobs": [...]}
+    # with "location", not {"jobPostings": [...]} with "locationName".
     async with sem:
         try:
             r = await client.get(f"https://api.ashbyhq.com/posting-api/job-board/{slug}", timeout=15)
             if r.status_code != 200:
                 return None
-            postings = r.json().get("jobPostings", [])
+            postings = r.json().get("jobs", [])
         except Exception:
             return None
         for p in postings:
             title = p.get("title") or ""
-            loc = p.get("locationName", "")
-            if classify_role(title) is not None and is_us_location(loc):
+            locs = [p.get("location") or ""] + [
+                s.get("location") or "" for s in (p.get("secondaryLocations") or []) if isinstance(s, dict)
+            ]
+            loc = "; ".join(x for x in locs if x)
+            if classify_role(title) is not None and is_ca_location(loc):
                 return title
         return None
 
@@ -153,14 +160,15 @@ async def check_lever(client, slug, sem):
         for p in postings:
             title = p.get("text") or ""
             loc = (p.get("categories") or {}).get("location", "")
-            if classify_role(title) is not None and is_us_location(loc):
+            if classify_role(title) is not None and is_ca_location(loc):
                 return title
         return None
 
 
 async def check_workday(client, slug, sem):
     """slug is 'wd{N}/{tenant}/{site}'. Only checks the first page (20 postings) —
-    enough to detect whether a PM role exists without paginating every tenant."""
+    enough to detect whether a Strategy/BizOps role exists without paginating
+    every tenant."""
     async with sem:
         try:
             wd_host, tenant, site = slug.split("/", 2)
@@ -182,7 +190,7 @@ async def check_workday(client, slug, sem):
         for p in postings:
             title = p.get("title") or ""
             loc = p.get("locationsText", "")
-            if classify_role(title) is not None and is_us_location(loc):
+            if classify_role(title) is not None and is_ca_location(loc):
                 return title
         return None
 
@@ -241,7 +249,7 @@ def main():
         cands = candidates(ats_type, args.limit, skip)
         print(f"{ats_type}: {len(cands)} new candidates to live-check")
         matches = asyncio.run(scan(ats_type, cands, args.concurrency))
-        print(f"{ats_type}: {len(matches)} companies have a live PM match")
+        print(f"{ats_type}: {len(matches)} companies have a live Strategy/BizOps match")
         all_matches.extend(matches)
 
     if not all_matches:
@@ -252,7 +260,7 @@ def main():
     # got added and why, even when writing straight to Supabase below.
     with open("new_companies.sql", "w") as f:
         f.write("-- Auto-discovered via expand_companies.py.\n")
-        f.write("-- Each row had at least one open role matching your PM/FDE + US-location filters at scan time.\n")
+        f.write("-- Each row had at least one open role matching your Strategy/BizOps +\n-- Toronto/remote-Canada location filters at scan time.\n")
         f.write("insert into companies (name, ats_type, ats_slug, tier, active, source, notes) values\n")
         rows = [
             f"  ('{esc(name)}', '{ats_type}', '{esc(slug)}', '{args.tier}', true, 'discovered', "

@@ -1,38 +1,16 @@
 -- 002_rls_policies.sql
--- Public read for the watchlist board; writes happen only via the
--- service_role key used by the pipeline (which bypasses RLS).
+-- No public frontend — this is a private pipeline read via the Supabase
+-- dashboard only. RLS is enabled with NO policies, so anon/authenticated
+-- (the API-facing roles) are denied by default. The pipeline itself writes
+-- with the service_role key, which always bypasses RLS regardless of what's
+-- configured here — this file only locks down the anon/PostgREST path.
+--
+-- Deliberately no policies and no grants: enabling RLS with zero policies is
+-- safer than leaving RLS off, since it still blocks anon/authenticated even
+-- if a future migration accidentally grants table privileges to those roles.
+-- You can always browse data directly in the Supabase Table Editor / SQL
+-- Editor — those use your dashboard session, not this RLS path.
 
 alter table companies enable row level security;
 alter table jobs enable row level security;
 alter table matches enable row level security;
-
--- ============================================================
--- Public read on everything (watchlist is a public page)
--- ============================================================
-drop policy if exists "public read companies" on companies;
-create policy "public read companies"
-  on companies for select
-  to anon, authenticated
-  using (true);
-
-drop policy if exists "public read jobs" on jobs;
-create policy "public read jobs"
-  on jobs for select
-  to anon, authenticated
-  using (true);
-
-drop policy if exists "public read matches" on matches;
-create policy "public read matches"
-  on matches for select
-  to anon, authenticated
-  using (true);
-
--- ============================================================
--- NO write policies — writes are blocked for anon/authenticated.
--- The pipeline writes with the service_role key, which bypasses RLS.
--- ============================================================
-
--- ============================================================
--- Grant view access
--- ============================================================
-grant select on v_watchlist to anon, authenticated;

@@ -2,14 +2,14 @@
 """
 fetch_and_score.py
 ------------------
-Pulls open jobs from each ATS, filters by PM/FDE title + US location + recency,
-fetches the JD, and scores relevant jobs against the candidate profile in two
-stages (cheap Haiku screen -> Sonnet confirm for the promising few), then upserts
-matches into Supabase. The candidate profile + rubric ride in a cached system
-block to keep per-call token cost down.
+Pulls open jobs from each ATS, filters by Strategy/BizOps title + Toronto/remote-
+Canada location + recency, fetches the JD, and scores relevant jobs against the
+candidate profile in two stages (cheap Haiku screen -> Sonnet confirm for the
+promising few), then upserts matches into Supabase. The candidate profile +
+rubric ride in a cached system block to keep per-call token cost down.
 
-Title classification (PM + FDE families) and the US-wide location filter live in
-filters.py, shared with expand_companies.py.
+Title classification (Strategy + BizOps families) and the Toronto/remote-Canada
+location filter live in filters.py, shared with expand_companies.py.
 
 Env vars (GitHub Actions secrets):
   SUPABASE_URL          https://xxxx.supabase.co
@@ -23,6 +23,10 @@ Optional (cost/behavior knobs):
   STAGE1_PASS           Haiku score that escalates to Sonnet (default: 55)
   JD_MAX_CHARS          JD chars sent to the model (default: 3000)
   FIRST_RUN_DAYS        Back-catalog window for a new company (default: 7)
+  MAX_YEARS_REQUIRED    JD years-of-experience ceiling (default: 5)
+  DRY_RUN               "true" = fetch + filter only: no Claude calls, no DB
+                        writes. Free. Use to validate before a real run.
+  MAX_COMPANIES         Cap companies processed (0 = all). Quick smoke tests.
 """
 
 import os, json, time, logging, random, re
@@ -30,9 +34,10 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 import httpx
 
-# Role classification + US-location filters live in filters.py so they stay
-# identical between this daily pipeline and expand_companies.py (discovery).
-from filters import classify_role, is_us_location
+# Role classification + Toronto/remote-Canada location filters live in
+# filters.py so they stay identical between this daily pipeline and
+# expand_companies.py (discovery).
+from filters import classify_role, is_ca_location, _SENIORITY_RE as _TOO_SENIOR_RE
 
 logging.basicConfig(
     level=logging.INFO,
@@ -45,8 +50,17 @@ log = logging.getLogger("watchlist")
 
 SUPABASE_URL         = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
-ANTHROPIC_API_KEY    = os.environ["ANTHROPIC_API_KEY"]
 SCORE_THRESHOLD      = int(os.getenv("SCORE_THRESHOLD", "65"))
+
+# Dry run: fetch + filter + log only. No Claude calls (so no cost) and no
+# Supabase writes. Everything read-only still runs, so the log shows exactly
+# which postings a real run would have scored.
+DRY_RUN       = os.getenv("DRY_RUN", "").strip().lower() in ("1", "true", "yes")
+MAX_COMPANIES = int(os.getenv("MAX_COMPANIES", "0") or "0")
+
+# Only required for a real run — a dry run never calls the API, so it can run
+# without a key (handy for validating filters locally before paying for anything).
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "") if DRY_RUN else os.environ["ANTHROPIC_API_KEY"]
 
 # Two-stage scoring to keep cost down: a cheap Haiku pass screens every job, and
 # only jobs that clear STAGE1_PASS get the authoritative (pricier) Sonnet verdict.
@@ -90,9 +104,9 @@ with open(_PROFILE_PATH) as _f:
     CANDIDATE_PROFILE = _f.read()
 
 # ── Filters ────────────────────────────────────────────────────────────────────
-# The PM/FDE title classifier (classify_role) and the US-wide location check
-# (is_us_location) are imported from filters.py — the single source of truth
-# shared with expand_companies.py.
+# The Strategy/BizOps title classifier (classify_role) and the Toronto/remote-
+# Canada location check (is_ca_location) are imported from filters.py — the
+# single source of truth shared with expand_companies.py.
 
 
 def is_recent(posted_at: Optional[str], cutoff: datetime) -> bool:
@@ -111,7 +125,7 @@ def is_recent(posted_at: Optional[str], cutoff: datetime) -> bool:
 def should_keep(title: str, location: str, posted_at: Optional[str], cutoff: Optional[datetime]) -> bool:
     if classify_role(title) is None:
         return False
-    if not is_us_location(location):
+    if not is_ca_location(location):
         return False
     if cutoff and not is_recent(posted_at, cutoff):
         return False
@@ -153,7 +167,24 @@ def fetch_greenhouse_jd(job_id: str, slug: str) -> str:
         return ""
 
 
+def _ashby_location(j: dict) -> str:
+    """Ashby splits location across `location` + `secondaryLocations`. Join them
+    so a role listed as Vancouver-primary / Toronto-secondary still matches the
+    GTA filter instead of being dropped on the primary alone."""
+    parts = [j.get("location") or ""]
+    for sec in (j.get("secondaryLocations") or []):
+        loc = sec.get("location") if isinstance(sec, dict) else None
+        if loc:
+            parts.append(loc)
+    return "; ".join(p for p in parts if p)
+
+
 def fetch_ashby(slug: str) -> list[dict]:
+    # NOTE: the posting API returns {"jobs": [...]} with a "location" field.
+    # This previously read "jobPostings"/"locationName" (Ashby's *private* board
+    # schema), so every Ashby company silently returned zero jobs. Verified
+    # against the live endpoint — keys are: id, title, location,
+    # secondaryLocations, jobUrl, publishedAt, descriptionHtml, isListed.
     url = f"https://api.ashbyhq.com/posting-api/job-board/{slug}"
     try:
         r = httpx.get(url, timeout=20)
@@ -162,12 +193,12 @@ def fetch_ashby(slug: str) -> list[dict]:
             {
                 "ats_job_id": j.get("id", ""),
                 "title":      j.get("title", ""),
-                "location":   j.get("locationName", ""),
+                "location":   _ashby_location(j),
                 "url":        j.get("jobUrl", ""),
                 "posted_at":  j.get("publishedAt"),
                 "raw_jd":     _strip_html(j.get("descriptionHtml", "")),
             }
-            for j in r.json().get("jobPostings", [])
+            for j in r.json().get("jobs", [])
             if j.get("isListed") is not False
         ]
     except Exception as e:
@@ -207,7 +238,7 @@ def fetch_workday(slug: str) -> list[dict]:
 
     Workday has no public REST API. This calls the same undocumented JSON
     endpoint their own careers-page widget uses. Capped at 100 postings per
-    company (5 pages) — plenty to find PM roles without hammering a tenant
+    company (5 pages) — plenty to find Strategy/BizOps roles without hammering a tenant
     that has thousands of open reqs.
     """
     try:
@@ -287,43 +318,45 @@ ATS_FETCHERS = {
 # ── Claude Scoring ─────────────────────────────────────────────────────────────
 # Models are configured above (SCORE_MODEL_STAGE1 / STAGE2).
 
-SCORE_SYSTEM = """You are a job-fit evaluator for one specific candidate. Judge how well THIS candidate fits THIS role. Company prestige is irrelevant: a famous AI lab role that rigidly demands 8 years of product management is a BAD fit and must score low.
+SCORE_SYSTEM = """You are a job-fit evaluator for one specific candidate. Judge how well THIS candidate fits THIS role. Company prestige is irrelevant: a famous firm's role that rigidly demands 5+ years of pure corporate-strategy experience is a BAD fit and must score low.
 
 Output ONLY valid JSON (no markdown, no prose). Exactly these fields:
   score            integer 0-100
-  role_family      "pm" | "fde" | "other"      (which lens you judged with)
+  role_family      "strategy" | "bizops" | "other"      (which lens you judged with)
   role_fit         "strong" | "moderate" | "weak"
   level_fit        "strong" | "moderate" | "weak"
   location_fit     "strong" | "moderate" | "weak"
   years_required   integer or null   (max years of experience the JD demands; null if unstated)
   meets_experience true | false      (does the candidate qualify under the candidate's years-of-experience rule?)
-  blocker          true | false      (does it require US citizenship, a security clearance, a green card, or state no sponsorship ever?)
+  blocker          true | false      (does it require US citizenship/US-only work authorization, a US federal security clearance, or explicitly require a location outside Canada?)
   reasoning        string, max 120 chars, plain English
 
 Which lens to use (role_family):
-  - "pm"  = Product Manager / Product Lead roles. Judge product-ownership fit.
-  - "fde" = Forward Deployed / Applied AI / Solutions / Deployment / Implementation Engineer roles. Judge "engineer who ships next to the customer" fit (coding + customer delivery), NOT PM ownership.
+  - "strategy" = Corporate Strategy / Strategy Consulting / Corporate Development roles. Judge structured-analysis + executive-facing fit (breaking down ambiguous problems, building the recommendation, presenting to leadership).
+  - "bizops"   = Business Operations / Revenue Operations / Sales Operations / Ops Analyst-Manager roles. Judge "builds the dashboards/process/reporting that run the business" fit — process + data fluency, cross-functional execution.
   - "other" = neither. Set role_fit weak.
 A title-screen guess is provided, but decide for yourself from the JD.
 
 DIMENSION RUBRICS:
 
 ROLE FIT (does the role type match a target family + the candidate's strengths?):
-  strong:   A PM or FDE role squarely in the candidate's wheelhouse — AI/ML, LLM apps, developer tools, cloud/data platforms, workflow automation, applied-AI, or technical/platform PM.
-  moderate: A legitimate PM/FDE role in a viable but less-preferred area (general B2B SaaS, fintech, edtech, consumer, marketplaces) the candidate could still do well in.
-  weak:     Not really a target role — the title is actually EM, designer, analyst, program/project manager, or marketing (role_family "other") — or it demands deep domain expertise the candidate lacks.
+  strong:   A Strategy or BizOps role squarely in the candidate's wheelhouse — tech/fintech/SaaS client base, cross-functional advisory or corp-dev work, dashboard/KPI/reporting ownership, M&A or market analysis.
+  moderate: A legitimate Strategy/BizOps role in a viable but less-preferred industry (traditional/non-tech B2B, retail, healthcare, consumer) the candidate could still do well in.
+  weak:     Not really a target role — the title is actually EM, designer, pure financial/investment analyst, program/project manager, marketing, or a physical/warehouse ops role (role_family "other") — or it demands deep domain expertise the candidate lacks (e.g. requires a CPA/CFA, requires 5+ years of hands-on software engineering).
 
-LEVEL FIT (apply the candidate's years-of-experience rule literally):
-  strong:   JD accepts "X years of PM OR equivalent / adjacent / technical / related experience," OR asks ~2-5 years, OR uses "mid-level"/"IC" language, OR is PM II/III. -> meets_experience true.
-  moderate: JD asks ~5-7 years of product management, OR says "Senior" but the described scope is individual-contributor (no direct reports).
-  weak:     JD rigidly requires 5+ years of PURE product management with no adjacency clause, OR requires 8+ years, OR requires people management, OR is Director/VP/Head-of level. -> meets_experience false.
+LEVEL FIT (apply the candidate's years-of-experience rule literally — the candidate has ~2 years of post-university experience, so BE STRICT here; an over-scored senior role wastes their time):
+  strong:   JD asks for ~1-3 years of consulting/strategy/analyst/operations experience, OR uses "Associate"/"Analyst"/"Senior Associate" language, OR explicitly accepts consulting-to-industry transitions.
+  moderate: JD asks ~3-5 years, OR says "Manager" but the described scope is individual-contributor (no direct reports), OR accepts "consulting or equivalent" broadly.
+  weak:     JD requires 5+ years, OR requires people management / direct reports, OR is Senior Manager / Principal / Director / VP / Head-of level, OR rigidly requires PURE in-house strategy-operations tenure with no consulting-equivalent clause. -> meets_experience false.
+
+TITLE-LEVEL CEILING (applies regardless of what the JD body says): the candidate has ~2 years of experience. Any role titled "Senior Manager", "Sr. Manager", "Senior <function> Manager", "Principal", "Director", "VP", or "Head of" is ABOVE their level -> level_fit weak, meets_experience false. Titles at or below "Manager" / "Senior Analyst" / "Senior Associate" / "Lead" are in range and should be judged on the JD's stated years requirement.
 
 LOCATION FIT:
-  strong:   Any US location (any city or state), Remote/Hybrid with US eligibility, or unspecified. Never penalize a specific US city.
-  moderate: US-eligible but ambiguous.
-  weak:     Genuinely non-US, or requires work authorization / relocation outside the US.
+  strong:   Toronto/GTA (any specific GTA city), Remote with Canada-wide eligibility, or unspecified. Never penalize a specific GTA city.
+  moderate: Canada-eligible but ambiguous (e.g. bare "Canada" with no city).
+  weak:     A real but non-GTA Canadian city with no remote option (e.g. Vancouver-only, Montreal-only, on-site), or genuinely non-Canadian, or requires relocation outside Canada.
 
-BLOCKER: set blocker true only if the JD requires US citizenship, an active security clearance, a green card / permanent residency, or states no visa sponsorship ever. The candidate is on OPT and cannot take those.
+BLOCKER: set blocker true only if the JD requires US citizenship or US-only work authorization, an active US federal security clearance, or explicitly states the role must be based outside Canada with no remote option. The candidate is a Canadian citizen, so Canadian-authorization requirements are never a blocker.
 
 SCORING FORMULA — start at 75, then adjust:
   role_fit:     strong +15 | moderate +5 | weak -20
@@ -402,7 +435,7 @@ def _call_model(model: str, title: str, location: str, raw_jd: str,
         if start > 0:
             text = text[start:]
         res, _ = json.JSONDecoder().raw_decode(text)
-        return _apply_score_guards(res)
+        return _apply_score_guards(res, title)
     except Exception as e:
         log.warning(f"Score failed ({model}) for '{title}': {e}")
         return None
@@ -425,7 +458,12 @@ def score_job(title: str, location: str, raw_jd: str, role_family: Optional[str]
     return screen
 
 
-def _apply_score_guards(res: dict) -> dict:
+# Years-required ceiling: with ~2 years of experience, a JD demanding 5+ years
+# is out of range no matter how well the rest of it reads.
+MAX_YEARS_REQUIRED = int(os.getenv("MAX_YEARS_REQUIRED", "5"))
+
+
+def _apply_score_guards(res: dict, title: str = "") -> dict:
     """Deterministic caps so a good-sounding JD can't sneak past the real
     disqualifiers, independent of model wording. Also folds role family +
     years-required into the stored reasoning so the board shows them without
@@ -435,13 +473,28 @@ def _apply_score_guards(res: dict) -> dict:
     except (TypeError, ValueError):
         score = 0
 
+    # Title-level ceiling, enforced in code rather than trusting the prompt.
+    # classify_role() already drops these before scoring, so this only fires on
+    # a title that slipped through a wording we didn't anticipate.
+    too_senior = bool(_TOO_SENIOR_RE.search(title or ""))
+
+    # Years ceiling: the model reports years_required; anything at or above the
+    # cap is a level miss regardless of the score it assigned.
+    yrs = res.get("years_required")
+    years_miss = isinstance(yrs, int) and yrs >= MAX_YEARS_REQUIRED
+
     # Hard blocker (citizenship / clearance / green card / no-sponsorship): unusable.
     if res.get("blocker") is True:
         score = 0
     # Experience/level miss: keep it below the match threshold regardless of how
-    # the model scored it (a weak level_fit or an explicit experience miss).
-    elif res.get("level_fit") == "weak" or res.get("meets_experience") is False:
+    # the model scored it (a weak level_fit, an explicit experience miss, a
+    # too-senior title, or a years requirement past the cap).
+    elif (res.get("level_fit") == "weak" or res.get("meets_experience") is False
+          or too_senior or years_miss):
         score = min(score, 55)
+        if too_senior or years_miss:
+            res["level_fit"] = "weak"
+            res["meets_experience"] = False
 
     res["score"] = max(0, min(100, score))
 
@@ -499,6 +552,8 @@ def sb_patch(table: str, filters: dict, data: dict):
 
 def main():
     log.info("=== Watchlist pipeline starting ===")
+    if DRY_RUN:
+        log.info("*** DRY RUN — no Claude calls, no database writes. Nothing is billed. ***")
 
     companies = sb_get("companies", {"active": "eq.true", "select": "*"})
     log.info(f"Loaded {len(companies)} active companies")
@@ -528,6 +583,10 @@ def main():
     random.shuffle(known_cos)
     companies = first_run_cos + known_cos
     log.info(f"Order: {len(first_run_cos)} first-run companies queued first, then {len(known_cos)} known (shuffled)")
+
+    if MAX_COMPANIES:
+        companies = companies[:MAX_COMPANIES]
+        log.info(f"MAX_COMPANIES={MAX_COMPANIES} — processing only the first {len(companies)}")
 
     total_fetched = total_kept = total_scored = total_errors = 0
     all_scores: list[int] = []
@@ -569,6 +628,14 @@ def main():
 
         if not relevant:
             time.sleep(0.5)
+            continue
+
+        # Dry run stops here: show exactly what a real run would have scored,
+        # then move on without hydrating JDs, calling Claude, or writing to the DB.
+        if DRY_RUN:
+            for p in relevant:
+                log.info(f"    WOULD SCORE: {p['title']}  |  {p.get('location', '')}")
+            time.sleep(0.3)
             continue
 
         # Hydrate the full JD for every kept role that doesn't already have one.
@@ -660,12 +727,15 @@ def main():
 
         time.sleep(1)
 
-    # Mark jobs that disappeared from ATS as closed
+    # Mark jobs that disappeared from ATS as closed. Skipped on a dry run —
+    # and it would be wrong there anyway, since MAX_COMPANIES/early-continue
+    # means seen_this_run is only a partial view of what's actually open.
     closed_count = 0
-    for (co_id, ats_job_id), job_id in existing_map.items():
-        if (co_id, ats_job_id) not in seen_this_run:
-            sb_patch("jobs", {"id": job_id}, {"status": "closed"})
-            closed_count += 1
+    if not DRY_RUN and not MAX_COMPANIES:
+        for (co_id, ats_job_id), job_id in existing_map.items():
+            if (co_id, ats_job_id) not in seen_this_run:
+                sb_patch("jobs", {"id": job_id}, {"status": "closed"})
+                closed_count += 1
 
     score_summary = f"avg_score={sum(all_scores)/len(all_scores):.0f}" if all_scores else "no jobs scored"
     log.info(
@@ -685,6 +755,11 @@ def main():
         log.info(f"    cache[{m_name}]: read={rd} written={wr} uncached_input={uc} hit_rate={hit_pct:.1f}%")
     if companies_with_matches:
         log.info(f"New matches from: {', '.join(companies_with_matches)}")
+    if DRY_RUN:
+        log.info(
+            f"*** DRY RUN complete — {total_kept} posting(s) passed the filters and "
+            f"would be scored on a real run. $0 spent, nothing written. ***"
+        )
 
 
 # ── Utilities ──────────────────────────────────────────────────────────────────

@@ -40,7 +40,7 @@ on:
 
 jobs:
   discover:
-    name: Scan ATS boards for open PM/FDE roles
+    name: Scan ATS boards for open Strategy/BizOps roles
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
