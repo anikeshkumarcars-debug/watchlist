@@ -108,7 +108,13 @@ _SENIORITY_RE = re.compile(
     r"|\bsenior\b.*\bmanager\b|\bsr\.?\b.*\bmanager\b|\bsenior mgr\b"
     r"|\bprincipal\b"
     r"|\bintern\b|\binterns\b|\binternship\b"
-    r"|\bapprentice\b|\bapprenticeship\b",
+    r"|\bapprentice\b|\bapprenticeship\b"
+    # Student / co-op / campus programs. A live dry run surfaced RBC's
+    # "Winter 2027 Student - Strategy Analyst, Commercial Banking (4 months)",
+    # which \bintern\b alone did not catch. The candidate is ~2 years
+    # post-university and not seeking these.
+    r"|\bstudent\b|\bstudents\b|\bco-?op\b|\bnew grad\w*\b|\bnew-grad\w*\b"
+    r"|\bcampus\b|\bearly talent\b|\bgraduate program\w*\b|\bundergraduate\b",
     re.I,
 )
 
@@ -276,6 +282,11 @@ def _selftest() -> int:
         ("Head of Strategy", None),
         ("Chief of Staff", None),                        # deliberately unlisted
         ("Strategy Internship", None),
+        # Student / co-op programs — surfaced by a live dry run.
+        ("Winter 2027 Student - Strategy Analyst, Commercial Banking (4 months)", None),
+        ("Business Operations Co-op", None),
+        ("Strategy Analyst, New Grad", None),
+        ("Campus Recruiting - Strategy Analyst", None),
         ("Software Engineer", None),
         ("Product Designer", None),
         ("International Strategy Manager", "strategy"),  # must NOT hit intern/non-CA
